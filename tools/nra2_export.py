@@ -1,278 +1,192 @@
-#!BPY
+bl_info = {
+    "name": "NRA2 Corona Exporter",
+    "author": "LD",
+    "version": (1, 0),
+    "blender": (4, 5, 4),
+    "location": "File > Export > NRA2 (.nra2)",
+    "description": "Export scene, materials, camera, and geometry to NRA2 format",
+    "category": "Export",
+}
 
-"""
-Name: 'NRA2 (.nra2) ...'
-Blender: 242
-Group: 'Export'
-Tooltip: 'Exports to nra2 format'
-"""
+import bpy
+import bmesh
+import struct
+import os
+from mathutils import Vector, Quaternion
 
+def write_geo(obj, basepath):
+    mesh = obj.to_mesh()
+    mesh.calc_loop_triangles()
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bm.verts.ensure_lookup_table()
 
-import math
-import sys
-import struct, os, time, cStringIO
-import Blender
-from Blender import *
-from cStringIO import StringIO
-from Blender.Mathutils import *
+    vertices = [v.co[:] for v in bm.verts]
+    triangles = [tri.vertices for tri in mesh.loop_triangles]
+    geo_filename = os.path.join(basepath, obj.name + ".geo")
 
+    with open(geo_filename, "wb") as f:
+        f.write(struct.pack("<I", 0xc01337))  # GEO_MAGIC
+        f.write(struct.pack("<I", 2))         # GEO_VERSION
+        f.write(struct.pack("<Q", len(triangles)))
+        f.write(struct.pack("<Q", 32))
+        f.write(struct.pack("<Q", 32 + len(triangles) * 12))
+        for tri in triangles:
+            f.write(struct.pack("<III", *tri))
+        for v in vertices:
+            f.write(struct.pack("<fff", *v))
 
-def getTextureFileName(filename):
-	f = filename[filename.rfind('/')+1:-4]
-	f = f[f.rfind('\\')+1:]
-	return f
+def write_material(mat, index):
+    lines = []
+    brdf_mat = index
+    num_mats = brdf_mat + 1
+    
 
-def write(filename):
-  if not filename.lower().endswith('.nra2'):
-	filename += '.nra2'
+    # Base color
+    if mat.use_nodes:
+        for node in mat.node_tree.nodes:
+            if node.type == 'BSDF_PRINCIPLED':
+                c = node.inputs['Base Color'].default_value
+                lines.append(f"diffuse # {brdf_mat}")
+                lines.append(f"color d {c[0]:.5f} {c[1]:.5f} {c[2]:.5f} {brdf_mat} # {num_mats}")
+                '''
+                base_color = node.inputs['Base Color'].default_value
+                metallic = node.inputs['Metallic'].default_value
+                roughness = node.inputs['Roughness'].default_value
+                emission = node.inputs['Emission'].default_value
+                emission_strength = node.inputs['Emission Strength'].default_value
+                specular = node.inputs['Specular'].default_value
+                '''
+                num_mats += 1
+                break
 
-  # don't messily append to existing files
-  #if sys.exists(filename): return
+    
+    # Emission (process after base color)
+    emission_found = False
+    if mat.use_nodes:
+        for node in mat.node_tree.nodes:
+            if node.type == 'EMISSION':
+                e = node.inputs["Color"].default_value
+                strength = node.inputs["Strength"].default_value
+                lines.append(f"color e {e[0]*strength:.5f} {e[1]*strength:.5f} {e[2]*strength:.5f} {brdf_mat} # {num_mats}")
+                num_mats += 1
+                emission_found = True
 
-  # leave edit mode
-  editmode = Window.EditMode()
-  if editmode: Window.EditMode(0)
-  
-  # scale light emission
-  light_scale = 30.0
+    # Combine components
+    if emission_found:
+        lines.append(f"mult 2 {brdf_mat+1} {brdf_mat+2} {brdf_mat} # {num_mats} {mat.name}")
+    else:
+        lines.append(f"mult 1 {brdf_mat+1} {brdf_mat} # {num_mats} {mat.name}")
 
-  # get all objects
-  objects = Blender.Object.Get()
+    return lines
 
-  # and open shader file
-  matfile = open(filename, "wb")
-  matfile.write("cloudy_sky\n")
-  file_str = StringIO()
+def write_camera(filepath, cam_obj):
+    cam_data = cam_obj.data
+    cam_matrix = cam_obj.matrix_world
+    loc = cam_matrix.to_translation()
+    rot = cam_matrix.to_quaternion()
 
-  num_mats = 0
-  materials = []
-  mat_num = []
-  # numObjects = 0
+    # Duplicate for shutter-close (no motion blur)
+    pos_t1 = loc
+    rot_t1 = rot
 
-  num_mats = 0
-  camn = 1
-  for o in objects:
-	
-	if (o.Layer & 1 != 1): continue # ignore all objects not in layer 1
-		
-	if o.getType() == "Camera":
-		print "Camera " + o.name
-		#size
-		context = Scene.GetCurrent().getRenderingContext()
-		xsize = context.imageSizeX()
-		ysize = context.imageSizeY()
-		print xsize, ysize
-		#aspect ratio
-	  	#  ratio = float(context.imageSizeY())/float(context.imageSizeX())
-		#lens
-		odata = o.getData()
-		lens = odata.getLens()
-		#transform
-		omatrix = o.getInverseMatrix()
-		
-		oquat = omatrix.toQuat()
-		
-		nquat = Quaternion()
-		nquat.w = 0;nquat.x = 0;nquat.y = 1;nquat.z = 0
-		
-		mquat = Quaternion()
-		
-		mquat.w = nquat.w*oquat.w - nquat.x*oquat.x - nquat.y*oquat.y - nquat.z*oquat.z;
-		mquat.x = nquat.x*oquat.w + nquat.w*oquat.x + nquat.y*oquat.z - nquat.z*oquat.y;
-		mquat.y = nquat.w*oquat.y - nquat.x*oquat.z + nquat.y*oquat.w + nquat.z*oquat.x;
-		mquat.z = nquat.w*oquat.z + nquat.x*oquat.y - nquat.y*oquat.x + nquat.z*oquat.w;
-		
-		#focus distance
-		tdist = 10
-		for t in objects:
-			if t.name == (o.name+".target"):
-				t = t.loc
-				c = o.loc
-				tdistv = Mathutils.Vector([(t[0]-c[0]), (t[1]-c[1]), (t[2]-c[2])])
-				tdist = tdistv.length
-		
-		if tdist == 10: print "Free Camera"
-		else: print "Target Camera\nFosucs Distance = " + str(tdist)
-					
-		#write cam file
-		camfname = Blender.sys.splitext(filename)[0] + "0" + str(camn) + '.cam'
-		camn += 1
-		camfile = open(camfname, 'wb')
-		camfile.write(struct.pack("I", 0))
-		camfile.write(struct.pack("fff", o.loc[0], o.loc[1], o.loc[2]))
-		camfile.write(struct.pack("ffff",-mquat.w, mquat.x, mquat.y, mquat.z))
-		camfile.write(struct.pack("f", 20))
-		camfile.write(struct.pack("ii", xsize, ysize))
-		camfile.write(struct.pack("fffffffff", 0,0,0,0,0,0,0,0,0))
-		camfile.write(struct.pack("fffffffff", 0,0,0,0,0,0,0,0,0))
-		camfile.write(struct.pack("f", tdist))
-		camfile.write(struct.pack("f", 1))
-		camfile.write(struct.pack("f", 1.0))
-		camfile.write(struct.pack("ff", 0.24*xsize/ysize, 0.24))#0.36, 0.24))
-		camfile.write(struct.pack("i", 1))
-		camfile.write(struct.pack("f", (lens/110)))
-		camfile.write(struct.pack("f", 0))
-		camfile.write(struct.pack("i", 40))
-		
-		camfile.close()
-		
-		
-	
-	if o.getType() == "Mesh":
-		print "Mesh -- " + o.name
-	 	 # numObjects = numObjects + 1		# count objects
-	  	mats = o.data.materials + o.getMaterials()
-	  	# if (len(mats) > 0):  # append all materials to the export list
-	  	#   mat = mats[0]
-	  	for mat in mats:
-			if mat.users > 0 and mat.name not in materials:
-			  materials.append(mat.name)
-			  # write out material, append material number
-			  # TODO:
-			  # eta = mat.getFresnelMirr() 
-			  # if eta == 0 or eta = 1.0:
-			  # TODO: if face.smooth have normal shader.
-	
-			  brdf_mat = num_mats
-			  # file_str.write('ashi 100 100 # ' + str(num_mats) + '\n')
-			  file_str.write('diffuse # ' + str(num_mats) + '\n')
-			  num_mats = num_mats + 1
-			  textures = mat.getTextures()
-			  diffFileName = 'none'
-			  specFileName = 'none'
-			  bumpFileName = 'none'
-			  bumpStrength = 0
-	
-			  for tex in textures:
-				if tex == None: continue
-				if tex.tex.type != Texture.Types.IMAGE: continue
-				if tex.mtCol != 0:
-				  diffFileName = getTextureFileName(tex.tex.image.filename)
-				if tex.mtSpec != 0:
-				  specFileName = getTextureFileName(tex.tex.image.filename)
-				if tex.mtNor != 0:
-				  bumpFileName = getTextureFileName(tex.tex.image.filename)
-				  bumpStrength = tex.norfac / 5.0		   
-		
-			  file_str.write('normals '+ str(brdf_mat) + ' # ' + str(num_mats) + '\n')
-			  num_mats = num_mats + 1
-	
-			  if diffFileName == 'none' :
-				c = mat.rgbCol
-				file_str.write('color d '+ str(round(c[0],5))+' '+str(round(c[1],5))+' '+str(round(c[2],5))+' '+ str(brdf_mat) +' # ' + str(num_mats) + '\n')
-				num_mats = num_mats + 1
-			  else:
-				file_str.write('texture d '+ str(brdf_mat) + ' ' + diffFileName + ' # ' + str(num_mats) + '\n')
-				num_mats = num_mats + 1
-	
-			  if mat.emit != 0 :
-				# todo: use *diffuse color for colored light sources?
-				file_str.write('color e '+str(round(mat.emit*light_scale,5))+' '+str(round(mat.emit*light_scale,5))+' '+str(round(mat.emit*light_scale,5))+' '+ str(brdf_mat) +' # ' + str(num_mats) + '\n')
-				num_mats = num_mats + 1
-				
-			  ## if specFileName == 'none' :
-			  ##   c = mat.rgbCol
-			  ##   file_str.write('color s '+ str(round(c[0]/15,5))+' '+str(round(c[1]/15,5))+' '+str(round(c[2]/15,5))+' '+ str(brdf_mat) +' # ' + str(num_mats) + '\n')
-			  ##   num_mats = num_mats + 1
-			  ## else:
-			  ##   file_str.write('texture s '+ str(brdf_mat) + ' ' + diffFileName +' # ' + str(num_mats) + '\n')
-			  ##   num_mats = num_mats + 1
-	
-			  if bumpFileName != 'none' :
-				file_str.write('normalmap '+ str(brdf_mat) + ' ' + bumpFileName +' # ' + str(num_mats) + '\n')
-				num_mats = num_mats + 1
-	
-	
-			  file_str.write('mult ' + str(num_mats - brdf_mat - 1) + ' ')
-			  for i in range(brdf_mat+1, num_mats):
-				file_str.write(str(i) + ' ')
-			  file_str.write(str(brdf_mat) + ' # ' + str(num_mats) + ' '+ mat.name + '\n')
-			  mat_num.append(num_mats)
-			  num_mats = num_mats + 1
-			
-		  #else:
-		  #  print "ERROR: object " + obj.name + " has mesh without material!""
-		
-  matfile.write(str(num_mats) + '\n')
-  matfile.write(file_str.getvalue())
-  file_str = StringIO()
-  numObjects = 0
-  # matfile.write(str(numObjects) + '\n')
-  curr_mat = 0
-  shaders = []
-  tmpMesh = Mesh.New('sr_tmp_export')
-  for o in objects:
-	if (o.Layer & 1 != 1): continue # ignore all objects not in layer 1
+    # Film and lens settings
+    film_width = cam_data.sensor_width
+    film_height = cam_data.sensor_height
+    crop_factor = 1.0  # assume full frame
+    aperture = int(cam_data.dof.aperture_fstop) if cam_data.dof.use_dof else 8
+    exposure = 100  # dummy value
+    focal_length = cam_data.lens
+    iso = 100.0
 
-	if o.getType() != "Mesh":
-	  continue
+    # Focus
+    focus = cam_data.dof.focus_distance if cam_data.dof.use_dof else 10.0
+    focus_sensor_offset = 0.0
+    speed = 0.0
 
-	meshname = o.data.name
-	mo = Blender.NMesh.GetRaw(meshname)
-	if not mo : continue
+    cam_filename = os.path.splitext(filepath)[0] + "0.cam"
+    with open(cam_filename, "wb") as f:
+        f.write(b'CCAM')                          # magic
+        f.write(struct.pack("<i", 1))             # version
+        f.write(struct.pack("<3f", loc.x * 10, loc.y * 10, loc.z * 10))         # pos
+        f.write(struct.pack("<3f", pos_t1.x, pos_t1.y, pos_t1.z))# pos_t1
+        f.write(struct.pack("<4f", -rot.w, rot.x, rot.y, rot.z))  # orient
+        f.write(struct.pack("<4f", -rot_t1.w, rot_t1.x, rot_t1.y, rot_t1.z))  # orient_t1
+        f.write(struct.pack("<f", speed))
+        f.write(struct.pack("<f", focus_sensor_offset))
+        f.write(struct.pack("<f", focus * 10))
+        f.write(struct.pack("<f", film_width))
+        f.write(struct.pack("<f", film_height))
+        f.write(struct.pack("<f", crop_factor))
+        f.write(struct.pack("<i", aperture))
+        f.write(struct.pack("<i", exposure))
+        f.write(struct.pack("<f", focal_length/100))
+        f.write(struct.pack("<f", iso))
 
-	mats = o.data.getMaterials() + o.getMaterials();
-	matrix = o.getMatrix()
-	tmpMesh.getFromObject(o);
-	tmpMesh.transform(o.getMatrix(), True)
+    print(f"Exported full camera to {cam_filename}")
 
-	# write .ra2, .uv and .n file for each material
-	for m in mats:
+def write_nra2(filepath):
+    if not filepath.lower().endswith('.nra2'):
+        filepath += '.nra2'
 
-	  if m.users == 0: continue
+    scene = bpy.context.scene
+    objects = [obj for obj in scene.objects if obj.visible_get() and obj.type == 'MESH']
+    materials = []
+    mat_lines = []
+    geo_lines = []
 
-	  mfilename = m.name.replace("/", "_")
+    for obj in objects:
+        for mat in obj.data.materials:
+            if mat.name not in materials:
+                materials.append(mat.name)
+                mat_index = len(mat_lines)
+                mat_lines += write_material(mat, mat_index)
 
-	  curr_mat = 0
-	  for i in range(0, len(materials)):
-		if m.name == materials[i]:
-		  curr_mat = mat_num[i]
-	  
-	  # basefilename = filename[:-5] + "/" + sys.basename(filename)[:-5] + mfilename
-	  basefilename = sys.dirname(filename) + "/" + mfilename
-	  if not sys.exists(basefilename + ".ra2") :
-		# matfile.write(str(curr_mat) + ' ' + filename[:-5] + mfilename + '.ra2\n')
-		file_str.write(str(curr_mat) + ' ' + mfilename + '.ra2\n')
-		numObjects = numObjects + 1;
+    for obj in objects:
+        for mat in obj.data.materials:
+            mat_index = materials.index(mat.name)
+            geo_lines.append(f"{mat_index + 2} {obj.name}")
+            write_geo(obj, os.path.dirname(filepath))
 
-	  # append the data to files
-	  meshfile = open(basefilename + ".ra2", "ab");
-	  normfile = open(basefilename + ".n", "ab");
-	  uvfile   = open(basefilename + ".uv", "ab");
+    with open(filepath, "w") as f:
+        f.write("black\n")
+        f.write(f"{len(mat_lines)}\n")
+        f.write("\n".join(mat_lines) + "\n")
+        f.write(f"{len(geo_lines)}\n")
+        f.write("\n".join(geo_lines) + "\n")
 
-	  for face in tmpMesh.faces:
+    cam = scene.camera
+    if cam:
+        write_camera(filepath, cam)
+    else:
+        print("No camera found in scene!")
 
-		if mats[face.mat] != m: continue
-		for lfn in range(2, len(face.v)):
-		  for i in [0,lfn-1,lfn]:
-			meshfile.write(struct.pack("fff", face.v[i].co[0], face.v[i].co[1], face.v[i].co[2]))
-						
-			if  tmpMesh.faceUV: uvfile.write(struct.pack("ff",face.uv[i][0], face.uv[i][1]))
-			else: uvfile.write(struct.pack("ff",0,0))
-							
-		  # TODO: if material uses interpolated normals
-		  if face.smooth:
-			for i in [0,lfn-1,lfn]: 
-			  normfile.write(struct.pack("fff",face.v[i].no[0], face.v[i].no[1], face.v[i].no[2]))
-		  else:
-			for i in [0,lfn-1,lfn]:
-			  normfile.write(struct.pack("fff",face.no[0], face.no[1], face.no[2]))
+    print(f"Exported {filepath} with {len(materials)} materials and {len(objects)} geometry entries.")
 
-	  meshfile.close()
-	  normfile.close()
-	  uvfile.close()
+class ExportNRA2(bpy.types.Operator):
+    bl_idname = "export_scene.nra2_corona"
+    bl_label = "Export NRA2 (Corona)"
+    filename_ext = ".nra2"
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
 
+    def execute(self, context):
+        write_nra2(self.filepath)
+        return {'FINISHED'}
 
-  matfile.write(str(numObjects) + '\n')
-  matfile.write(file_str.getvalue())
-  matfile.close()
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
-  # restore mode
-  Window.EditMode(editmode)
+def menu_func_export(self, context):
+    self.layout.operator(ExportNRA2.bl_idname, text="NRA2 (Corona) Exporter")
 
-def main():
-	Blender.Window.FileSelector(write, 'NRa2 Export', 'dreggn.nra2')
+def register():
+    bpy.utils.register_class(ExportNRA2)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
-if __name__=='__main__':
-	print "\nExporting Corona Files"
-  	main()
+def unregister():
+    bpy.utils.unregister_class(ExportNRA2)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+
+if __name__ == "__main__":
+    register()

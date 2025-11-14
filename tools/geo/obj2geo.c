@@ -7,6 +7,8 @@
 #include "prims.h"
 #include "geo.h"
 
+#define VTX_DUPE 8
+
 static inline int to_zero_base_idx(const int idx, uint64_t num_indices)
 {
   return (idx <  0) ? idx + num_indices : idx - 1;
@@ -219,7 +221,7 @@ int main (int argc, char *arg[])
   shape.vtxidx = (prims_vtxidx_t *)malloc(sizeof(prims_vtxidx_t) * num_faces * 4);
   // safety margin for duplicated vertices with different normals:
   // TODO: count vertices with unique normals above!
-  shape.vtx = (prims_vtx_t *)malloc(sizeof(prims_vtx_t)*stride*4*num_verts);
+  shape.vtx = (prims_vtx_t *)malloc(sizeof(prims_vtx_t)*stride*VTX_DUPE*num_verts);
   uint32_t shape_num_verts = 0;
   uint32_t shape_num_vtxidx = 0;
   memset(vmap, 0xff, sizeof(uint32_t)*num_verts);
@@ -426,7 +428,7 @@ int main (int argc, char *arg[])
         if(!reuse)
         {
           vid.v = shape_num_verts++;
-          assert(vid.v < 4*num_verts); // TODO: better bound
+          assert(vid.v < VTX_DUPE*num_verts); // TODO: better bound
           for(int i=0;i<3;i++)
             shape.vtx[stride*vid.v].v[i] = v[3*vert[k] + i];
           // write second vertex in case of motion blur

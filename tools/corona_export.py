@@ -47,7 +47,7 @@ class renderer(Thread):
 		Thread.__init__(self)
 		self.cmdline = cmdline
 	def run(self):
-		print "calling "+self.cmdline
+		print("calling "+self.cmdline)
 		fp = os.popen(self.cmdline,"r")
 		while 1:
 			line = fp.readline()
@@ -76,11 +76,11 @@ def writetex(image,filename):
 
 	bpp = image.getDepth()
 	if bpp != 24 and bpp != 32:
-		print "ERROR: not 24 or 32 bits per pixel!"
+		print("ERROR: not 24 or 32 bits per pixel!")
 		return
 
 	if not sys.exists(imagefilename):
-		print "Writing image "+str(imagefilename)
+		print("Writing image "+str(imagefilename))
 		simage = open(imagefilename, 'wb')
 		simage.write(struct.pack("B", 0))
 		simage.write(struct.pack("B", 0))
@@ -286,7 +286,7 @@ def writemat(mat, mat_str, mat_num, num_mats, filename):
 	
 
 def write(filename):
-	print "\nExporting Corona Files"
+	print("\nExporting Corona Files")
 	time1 = sys.time()
 	if not filename.lower().endswith('.nra2'):
 		filename += '.nra2'
@@ -322,7 +322,7 @@ def write(filename):
 					sunfound = 1		
 		if not sunfound:
 			file_str += "daylight #\n"
-			print "No Sun found - using default !"
+			print("No Sun found - using default !")
 					
 	elif EnvType == 2:
 		file_str += "rgbeis %s %s\n" % (EnvFile.val, EnvGain.val)
@@ -520,7 +520,7 @@ def write(filename):
 	Window.EditMode(editmode)
 	time2 = sys.time()
 	time = time2-time1
-	print "Exported in %s seconds" % (int(time))
+	print("Exported in %s seconds" % (int(time)))
 
 
 
@@ -712,7 +712,7 @@ def readWriteValue(dict, name, draw, write, default):
 			except KeyError:
 				draw.val = default
 		except ValueError:
-			print "ValueError: on property \"%s\""%name
+			print("ValueError: on property \"%s\""%name)
 	else:
 		dict[name] = draw.val
 
@@ -765,7 +765,7 @@ def setFocus(target):
 		try:	
 			loc2 = selObj.getLocation()
 		except:
-			print "select an object to focus\n"
+			print("select an object to focus\n")
 			
 	if target == "C":
 		loc2 = Window.GetCursorPos()
@@ -776,7 +776,7 @@ def setFocus(target):
 				if t.name == (cam.name+".target"):
 					loc2 = t.loc
 		except:
-			print "No target found using Cursor\n"
+			print("No target found using Cursor\n")
 			loc2 = Window.GetCursorPos()
 			
 	FocusDistance.val = ((((loc1[0]-loc2[0])**2)+((loc1[1]-loc2[1])**2)+((loc1[2]-loc2[2])**2))**0.5)
@@ -846,7 +846,7 @@ mult 2 16 17 15 # 18 plane
 			tmpimage = Image.Load(imgfname)
 			bpy.data.images[key].fakeUser = 1
 		except:
-			print "could not load preview image %s!"%key
+			print("could not load preview image %s!"%key)
 	# os.system("rm "+tmpdir+"previews/*.tga")
 	os.system("rm "+imgfname)
 	
@@ -970,7 +970,7 @@ def drawMat():
 		activeobmats = (mmats + omats)
 	else:
 		return
-		print "hmmmm"
+		print("hmmmm")
 		activemat = Material.Get(materials[selmat.val])
 		amat = activemat.name
 
@@ -1105,8 +1105,8 @@ def drawGUI():
 		drawMat()
 	if Screen==1:
 		drawCamera()
- 	if Screen==2:
- 		drawEnv()
+	if Screen==2:
+		drawEnv()
 	if Screen==3:
  		drawRSet()
 
@@ -1228,7 +1228,7 @@ def buttonEvt(evt):  # function that handles button events
 			gplane.materials = matl
 			
 	if evt == evtccache:
-		print "Clearing CacheDir"
+		print("Clearing CacheDir")
 		os.system("rm "+tmpdir+"*.ra2")
 		os.system("rm "+tmpdir+"*.nra2")
 		os.system("rm "+tmpdir+"*.uv")
@@ -1238,7 +1238,7 @@ def buttonEvt(evt):  # function that handles button events
 		os.system("rm "+tmpdir+"*.ppm")
 		os.system("rm "+tmpdir+"previews/*.ppm")
 		os.system("rm "+tmpdir+"previews/*.tga")
-		print "Done"
+		print("Done")
 	
 	if evt == evtrpreview:
 		render_preview(activemat, "preview")

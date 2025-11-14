@@ -20,8 +20,4 @@ mult 2 11 3 0 # 12 fill light
 10 ../geo/sphere
 10 ../geo/cylinder
 2 ../geo/cylinder_cap
-12 ../geo/filllight
-
-14 ../geo/hairstrand
-2 ../geo/scalp
-5 ../geo/sidelight
+2 ../../cube

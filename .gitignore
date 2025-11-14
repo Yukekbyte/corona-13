@@ -42,4 +42,7 @@ data/xyz2spec.coeff
 corona
 arch
 config.mk
-./shaders/
+shaders/
+venv/
+.vscode/
+build/
