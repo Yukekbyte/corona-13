@@ -15,6 +15,7 @@
     along with corona-13.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "view.h"
 #include "sampler.h"
 #include "spectrum.h"
 #include "pointsampler.h"
@@ -27,20 +28,53 @@ typedef struct reservoir_t {
   uint64_t M; // number of samples seen
 } reservoir_t;
 
-typedef struct sampler_t {} sampler_t;
+typedef struct sampler_t {
+  reservoir_t **reservoirs;
+} sampler_t;
 
 int update(reservoir_t *r, path_t *path, double weight) {
   r->w_sum += weight;
   r->M++;
   if (((double)rand()/(double)RAND_MAX) < weight / r->w_sum) {
-    r->path = path;
+    path_copy(r->path, path);
     return 1;
   }
   return 0;
 }
     
-sampler_t *sampler_init() {return 0;}
-void sampler_cleanup(sampler_t *s) {}
+sampler_t *sampler_init() {
+  int i, j;
+  int w = view_width();
+  int h = view_height();
+
+  sampler_t *s = (sampler_t *)malloc(sizeof(sampler_t));
+
+  s->reservoirs = (reservoir_t**)malloc(w * sizeof(reservoir_t*));
+  for(i = 0; i < w; i++) {
+    s->reservoirs[i] = (reservoir_t*)malloc(h * sizeof(reservoir_t));
+  }
+
+  reservoir_t *r;
+  for(i = 0; i < w; i++) {
+    for(j = 0; j < h; j++) {
+      r = &s->reservoirs[i][j];
+      r->path = NULL;
+      r->w_sum = 0;
+      r->M = 0;
+    }
+  }
+
+  return s;
+}
+void sampler_cleanup(sampler_t *s) {
+  int w = view_width();
+  
+  for(int i = 0; i < w; i++) {
+    free(s->reservoirs[i]);
+  }
+  free(s->reservoirs);
+  free(s);
+}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
@@ -56,31 +90,42 @@ static inline mf_t sampler_mis(const path_t *p)
 
 void sampler_create_path(path_t *path)
 {
-  // keep this stuff on the stack (for now)
-  reservoir_t r;
-  path_t p;
-  r.path = &p;
-  r.w_sum = 0;
-  r.M = 0;
+  // keep this stuff on the stack
+  reservoir_t *r;
+  path_t p_init;
+  
+  // init and extend path once to determine pixel on camera and first vertex (stuff handled by pointsampler)
+  path_init(&p_init, path->index, path->sensor.camid);
+  if(path_extend(&p_init)) return;
+
+  int i = (int)p_init.sensor.pixel_i;
+  int j = (int)p_init.sensor.pixel_j;
+
+  // reset the reservoir (for now)
+  r = &rt.sampler->reservoirs[i][j];
+  r->path = &p_init;
+  r->w_sum = 0;
+  r->M = 0;
 
   // streaming RIS
   int M = 8;
-  for(int i = 0; i < M; i++) {
-    path_init(&p, path->index, path->sensor.camid);
+  for(int k = 0; k < M; k++) {
+    path_t p; // declaring out of loop creates issues...
+    path_copy(&p, &p_init);
 
     // direct illumination
-    if(path_extend(&p)) continue;
+    // sampling bsdf instead of light source: Fix this!
     if(path_extend(&p)) continue;
 
     double w = 1.0/M * path_throughput(&p);
-    update(&r, &p, w);
+    update(r, &p, w);
   }
 
   // call pointsampler_splat() on chosen sample
-  pointsampler_splat(r.path, path_throughput(r.path) * r.w_sum);
+  pointsampler_splat(r->path, path_throughput(r->path) * r->w_sum);
 
   // copy path at the end
-  path_copy(path, r.path);
+  path_copy(path, r->path);  
 }
 
 mf_t sampler_throughput(path_t *path)
