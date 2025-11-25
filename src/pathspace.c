@@ -228,6 +228,8 @@ int path_extend(path_t *path)
     // we just started a new path, begin at random number 0.
     // path->v[0].rand_beg = 0; // this is done by path_init(). we don't overwrite it, since someone might have
                                 // purposefully messed with it (kelemen mlt for bdpt)
+
+    // if path->v[0].mode is not set to s_emit, we sample on camera, else on light source
     if(path->v[0].mode & s_emit)
       path->v[0].throughput = light_sampler_sample(path);
     else

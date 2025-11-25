@@ -1,0 +1,75 @@
+black # no env map
+
+22
+
+diffuse # 0
+color d 0.7 0.7 0.7 # 1
+mult 1 1 0 # 2 white diffuse
+
+color d 0 0 0 # 3
+color e 2700 2700 2700 1. # 4
+mult 2 3 4 0 # 5 light.001
+
+dielectric 1.3 23 # 6
+color g 1 1 1 0.04 # 7
+mult 1 7 6 # 8 glass
+
+color d 0.1 0.1 0.1 # 9
+mult 1 9 0 # 10 board
+
+color d 0.1 0.1 0.1 # 11
+mult 1 11 0 # 12 black pieces
+
+color d 0.9 0.9 0.8 # 13
+mult 1 13 0 # 14 white pieces
+
+color d 0.78 0.78 0.56 # 15
+mult 1 15 0 # 16 table
+
+color d 0 0 0 # 17
+color e 100 100 100 1. # 18
+mult 2 17 18 0 # 19 light.002
+
+color s 1 1 1 # 20
+mult 2 9 20 0 # 21 board
+
+39
+16 geo/table
+5 geo/light_left
+19 geo/light_right
+21 geo/board
+21 geo/black_squares
+14 geo/light_squares
+14 geo/rook_a1
+14 geo/knight_b1
+14 geo/bishop_c1
+14 geo/queen_d1
+14 geo/king_e1
+14 geo/bishop_f1
+14 geo/knight_g1
+14 geo/rook_h1
+14 geo/pawn_a2
+14 geo/pawn_b2
+14 geo/pawn_c2
+14 geo/pawn_d2
+14 geo/pawn_e2
+14 geo/pawn_f2
+14 geo/pawn_g2
+14 geo/pawn_h2
+21 geo/pawn_a7
+21 geo/pawn_b7
+21 geo/pawn_c7
+21 geo/pawn_d7
+21 geo/pawn_e7
+21 geo/pawn_g7
+21 geo/pawn_h7
+21 geo/rook_a8
+21 geo/knight_b8
+21 geo/bishop_c8
+21 geo/queen_d8
+21 geo/king_e8
+21 geo/bishop_f8
+21 geo/knight_g8
+21 geo/rook_h8
+16 geo/sidepanel
+16 backpanel

@@ -21,7 +21,7 @@ color d 0 0.7 0 # 11
 mult 1 11 0 # 12 green diffuse
 
 color d 0.05 0.05 0.05 # 13
-mult 1 13 0 # 14 blue diffuse
+mult 1 13 0 # 14 black diffuse
 
 medium_rgb 0.014 0.005 0.003 0.85 # 15
 color v 0.99 0.96 0.94 # 16
@@ -45,6 +45,6 @@ mult 1 22 21 # 23 knight
 2 geo/cube
 2 geo/long_cube
 14 geo/pawn
-23 geo/knight
-8 geo/rook
-20 geo/bishop
+2 geo/knight
+2 geo/rook
+14 geo/bishop

@@ -15,6 +15,7 @@
     along with corona-13.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "pathspace/nee.h"
 #include "view.h"
 #include "sampler.h"
 #include "spectrum.h"
@@ -25,27 +26,38 @@
 typedef struct reservoir_t {
   path_t *path; // output sample
   double w_sum; // sum of weights
-  uint64_t M; // number of samples seen
+  double c; // confidence weight of output
+  mf_t W; // contribution weight: estimate for 1/f (because we choose p_hat := f)
 } reservoir_t;
 
 typedef struct sampler_t {
   reservoir_t **reservoirs;
 } sampler_t;
 
-int update(reservoir_t *r, path_t *path, double weight) {
+// Updates reservoir with sample and weight.
+// Returns 1 if sample was replaced, 0 if not.
+static int update(reservoir_t *r, path_t *path, double weight, double c) {
   r->w_sum += weight;
-  r->M++;
+  r->c += c;
   if (((double)rand()/(double)RAND_MAX) < weight / r->w_sum) {
     path_copy(r->path, path);
     return 1;
   }
   return 0;
 }
+
+static void combine(reservoir_t *s, const reservoir_t *r1, const reservoir_t *r2) {
+  s->c = 0;
+  s->w_sum = 0;
+  s->W = 0;
+
+  //TODO
+}
     
 sampler_t *sampler_init() {
-  int i, j;
-  int w = view_width();
-  int h = view_height();
+  uint64_t i, j;
+  uint64_t w = view_width(); // 1024 (standard)
+  uint64_t h = view_height(); // 576 (standard)
 
   sampler_t *s = (sampler_t *)malloc(sizeof(sampler_t));
 
@@ -58,18 +70,24 @@ sampler_t *sampler_init() {
   for(i = 0; i < w; i++) {
     for(j = 0; j < h; j++) {
       r = &s->reservoirs[i][j];
-      r->path = NULL;
+      r->path = (path_t *)malloc(sizeof(path_t));
       r->w_sum = 0;
-      r->M = 0;
+      r->c = 0;
     }
   }
 
   return s;
 }
+
 void sampler_cleanup(sampler_t *s) {
-  int w = view_width();
+  uint64_t i, j;
+  uint64_t w = view_width();
+  uint64_t h = view_height();
   
-  for(int i = 0; i < w; i++) {
+  for(i = 0; i < w; i++) {
+    for(j = 0; j < h; j++) {
+      free(s->reservoirs[i][j].path);
+    }
     free(s->reservoirs[i]);
   }
   free(s->reservoirs);
@@ -88,44 +106,69 @@ static inline mf_t sampler_mis(const path_t *p)
   return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
 }
 
-void sampler_create_path(path_t *path)
-{
-  // keep this stuff on the stack
-  reservoir_t *r;
-  path_t p_init;
-  
-  // init and extend path once to determine pixel on camera and first vertex (stuff handled by pointsampler)
-  path_init(&p_init, path->index, path->sensor.camid);
-  if(path_extend(&p_init)) return;
+// Perform Resampled Importance Sampling (streaming RIS)
+// r is an unused reservoir (will be reset).
+// init_path is an initial path for DI that has only 2 vertices starting from camera, no light source yet.
+static void ris(reservoir_t *r, const path_t *init_path) {
+  assert(init_path->length == 2); // only camera vertex and hitpoint
+  assert(!(init_path->v[0].mode & s_emit));
 
-  int i = (int)p_init.sensor.pixel_i;
-  int j = (int)p_init.sensor.pixel_j;
-
-  // reset the reservoir (for now)
-  r = &rt.sampler->reservoirs[i][j];
-  r->path = &p_init;
+  // reset
+  r->c = 0;
   r->w_sum = 0;
-  r->M = 0;
+  r->W = 0;
 
-  // streaming RIS
   int M = 8;
   for(int k = 0; k < M; k++) {
-    path_t p; // declaring out of loop creates issues...
-    path_copy(&p, &p_init);
+    path_t p; // declaring this out of loop creates issues...
+    path_copy(&p, init_path);
+    
+    // direct illumination, fails when hitpoint of init_path on envmap
+    if(nee_sample(&p)) continue;
 
-    // direct illumination
-    // sampling bsdf instead of light source: Fix this!
-    if(path_extend(&p)) continue;
-
-    double w = 1.0/M * path_throughput(&p);
-    update(r, &p, w);
+    double w = 1.0/M * path_throughput(&p); // 1/M uniform weights
+    
+    update(r, &p, w, 1); // new independent sample gets confidence = 1
   }
 
-  // call pointsampler_splat() on chosen sample
-  pointsampler_splat(r->path, path_throughput(r->path) * r->w_sum);
+  // if sample exists
+  if(r->w_sum > 0) {
+    r->W = mf_mul(mf_div(mf_set1(1.0f), path_throughput(r->path)), mf_set1(r->w_sum));
+  }
 
-  // copy path at the end
-  path_copy(path, r->path);  
+  // confidence capping
+  if(r->c > 50) r->c = 50;
+}
+
+void sampler_create_path(path_t *path)
+{  
+  // init and extend path once to determine pixel on camera and first vertex (stuff handled by pointsampler)
+  path_init(path, path->index, path->sensor.camid);
+  if(path_extend(path)) return;
+
+  // check for env map hit
+  if(path->v[path->length-1].flags & s_environment) {
+    pointsampler_splat(path, path_throughput(path));
+    return;
+  }
+
+  reservoir_t *r;
+  uint64_t i = (uint64_t)path->sensor.pixel_i;
+  uint64_t j = (uint64_t)path->sensor.pixel_j;
+  r = &rt.sampler->reservoirs[i][j];
+
+  // inital candidate generation
+  reservoir_t rris;
+  rris.path = (path_t*)malloc(sizeof(path_t));
+
+  ris(&rris, path);
+
+  // weighted throughput
+  pointsampler_splat(rris.path, mf_mul(path_throughput(rris.path), rris.W));
+  
+  path_copy(path, rris.path);
+
+  free(rris.path);
 }
 
 mf_t sampler_throughput(path_t *path)
