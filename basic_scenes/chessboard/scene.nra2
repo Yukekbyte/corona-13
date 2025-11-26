@@ -33,7 +33,7 @@ mult 2 17 18 0 # 19 light.002
 color s 1 1 1 # 20
 mult 2 9 20 0 # 21 board
 
-39
+40
 16 geo/table
 5 geo/light_left
 19 geo/light_right
@@ -61,6 +61,7 @@ mult 2 9 20 0 # 21 board
 21 geo/pawn_c7
 21 geo/pawn_d7
 21 geo/pawn_e7
+21 geo/pawn_f7
 21 geo/pawn_g7
 21 geo/pawn_h7
 21 geo/rook_a8

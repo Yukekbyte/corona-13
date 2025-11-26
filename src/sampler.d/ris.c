@@ -26,7 +26,7 @@
 typedef struct reservoir_t {
   path_t *path; // output sample
   double w_sum; // sum of weights
-  double c; // confidence weight of output
+  double c; // confidence weight of output (= the amount of samples behind the output sample)
   mf_t W; // contribution weight: estimate for 1/f (because we choose p_hat := f)
 } reservoir_t;
 
@@ -46,12 +46,30 @@ static int update(reservoir_t *r, path_t *path, double weight, double c) {
   return 0;
 }
 
-static void combine(reservoir_t *s, const reservoir_t *r1, const reservoir_t *r2) {
-  s->c = 0;
-  s->w_sum = 0;
-  s->W = 0;
+static void combine(reservoir_t *s, const reservoir_t *r) {
 
-  //TODO
+  mf_t w_r = mf_set1(0.0);
+  mf_t w_s = mf_set1(0.0);
+
+  // if r has a valid sample (otherwise we call path_throughput() with an uninitialized_path which gives NaN's)
+  if(r->w_sum > 0)
+    w_r = mf_mul(mf_set1(0.5), mf_mul(path_throughput(r->path), r->W)); // assume s and r for same pixel (starting vertex), then f(r.Y) * r.W = r.w_sum
+    //w_r = path_throughput(s->v[0], s->v[1], r->v[2]) * r->W; // f_q(r.Y) * estimate for 1/p_q'(r.Y)
+  
+  // if s has a valid sample
+  if(s->w_sum > 0)
+    w_s = mf_mul(mf_set1(0.5), mf_mul(path_throughput(s->path), s->W)); // is equal to simply s->w_sum for now...
+
+  s->w_sum = w_s;
+  update(s, r->path, w_r, r->c);
+
+  // update estimator
+  if(s->w_sum > 0) {
+    s->W = mf_div(mf_set1(s->w_sum), path_throughput(s->path));
+  }
+
+  // confidence capping
+  if(s->c > 20.) s->c = 20.;
 }
     
 sampler_t *sampler_init() {
@@ -131,13 +149,13 @@ static void ris(reservoir_t *r, const path_t *init_path) {
     update(r, &p, w, 1); // new independent sample gets confidence = 1
   }
 
-  // if sample exists
+  // update contribution weight W (= estimator for 1/f(r.Y)), only fails if all M samples were 0 samples
   if(r->w_sum > 0) {
-    r->W = mf_mul(mf_div(mf_set1(1.0f), path_throughput(r->path)), mf_set1(r->w_sum));
+    r->W = mf_div(mf_set1(r->w_sum), path_throughput(r->path));
   }
 
-  // confidence capping
-  if(r->c > 50) r->c = 50;
+  // confidence capping, not needed for M = 8
+  //if(r->c > 20) r->c = 20; 
 }
 
 void sampler_create_path(path_t *path)
@@ -160,13 +178,15 @@ void sampler_create_path(path_t *path)
   // inital candidate generation
   reservoir_t rris;
   rris.path = (path_t*)malloc(sizeof(path_t));
-
   ris(&rris, path);
 
-  // weighted throughput
-  pointsampler_splat(rris.path, mf_mul(path_throughput(rris.path), rris.W));
+  // combine with existing reservoir
+  combine(r, &rris);
+
+  // estimator f(r.Y) * r.W
+  pointsampler_splat(r->path, mf_mul(path_throughput(r->path), r->W));
   
-  path_copy(path, rris.path);
+  path_copy(path, r->path);
 
   free(rris.path);
 }
