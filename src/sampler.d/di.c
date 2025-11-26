@@ -29,28 +29,22 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static inline mf_t sampler_mis(const path_t *p)
-{
-  // this is just the hero wavelength weight:
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
-
 void sampler_create_path(path_t *path)
 {  
   // init and extend path once to determine pixel on camera and first vertex (stuff handled by pointsampler)
   path_init(path, path->index, path->sensor.camid);
   if(path_extend(path)) return;
 
-
-  // direct illumination
+  // direct illumination, fails when first vertex of path landed on envmap
   if(nee_sample(path)) return;
 
-  // call pointsampler_splat() with weighted throughput
-  pointsampler_splat(path, path_throughput(path));
+  md_t f = path_measurement_contribution_dx(path, 0, path->length-1);
+  md_t p = path_pdf(path);
+
+  if(p <= 0.)
+    return;
+
+  pointsampler_splat(path, md_2f(f / p));
 }
 
 mf_t sampler_throughput(path_t *path)

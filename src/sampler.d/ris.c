@@ -25,9 +25,9 @@
 
 typedef struct reservoir_t {
   path_t *path; // output sample
-  double w_sum; // sum of weights
+  md_t w_sum; // sum of weights
   double c; // confidence weight of output (= the amount of samples behind the output sample)
-  mf_t W; // contribution weight: estimate for 1/f (because we choose p_hat := f)
+  md_t W; // contribution weight: estimate for 1/p
 } reservoir_t;
 
 typedef struct sampler_t {
@@ -36,7 +36,7 @@ typedef struct sampler_t {
 
 // Updates reservoir with sample and weight.
 // Returns 1 if sample was replaced, 0 if not.
-static int update(reservoir_t *r, path_t *path, double weight, double c) {
+static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
   r->w_sum += weight;
   r->c += c;
   if (((double)rand()/(double)RAND_MAX) < weight / r->w_sum) {
@@ -46,26 +46,39 @@ static int update(reservoir_t *r, path_t *path, double weight, double c) {
   return 0;
 }
 
+static md_t f(path_t *path) {
+  if(path->length != 3)
+    return 0.0;
+  return path_measurement_contribution_dx(path, 0, path->length-1);
+}
+
+// Use the integrand f as target function p_hat
+static md_t p_hat(path_t *path) {
+  if(path->length != 3)
+    return 0.0;
+  return path_measurement_contribution_dx(path, 0, path->length-1);
+}
+
 static void combine(reservoir_t *s, const reservoir_t *r) {
 
-  mf_t w_r = mf_set1(0.0);
-  mf_t w_s = mf_set1(0.0);
+  md_t w_r = 0.;
+  md_t w_s = 0.;
 
-  // if r has a valid sample (otherwise we call path_throughput() with an uninitialized_path which gives NaN's)
-  if(r->w_sum > 0)
-    w_r = mf_mul(mf_set1(0.5), mf_mul(path_throughput(r->path), r->W)); // assume s and r for same pixel (starting vertex), then f(r.Y) * r.W = r.w_sum
+  // if r has a valid sample (otherwise we call p_hat with an uninitialized_path which can give NaN)
+  if(r->w_sum > 0.)
+    w_r = 0.5 * p_hat(r->path) * r->W; // assume s and r for same pixel (starting vertex), then f(r.Y) * r.W = r.w_sum
     //w_r = path_throughput(s->v[0], s->v[1], r->v[2]) * r->W; // f_q(r.Y) * estimate for 1/p_q'(r.Y)
   
   // if s has a valid sample
-  if(s->w_sum > 0)
-    w_s = mf_mul(mf_set1(0.5), mf_mul(path_throughput(s->path), s->W)); // is equal to simply s->w_sum for now...
+  if(s->w_sum > 0.)
+    w_s = 0.5 * p_hat(s->path) * s->W; // is equal to simply s->w_sum for now...
 
   s->w_sum = w_s;
   update(s, r->path, w_r, r->c);
 
   // update estimator
-  if(s->w_sum > 0) {
-    s->W = mf_div(mf_set1(s->w_sum), path_throughput(s->path));
+  if(s->w_sum > 0.) {
+    s->W = s->w_sum / p_hat(s->path);
   }
 
   // confidence capping
@@ -89,8 +102,8 @@ sampler_t *sampler_init() {
     for(j = 0; j < h; j++) {
       r = &s->reservoirs[i][j];
       r->path = (path_t *)malloc(sizeof(path_t));
-      r->w_sum = 0;
-      r->c = 0;
+      r->w_sum = 0.;
+      r->c = 0.;
     }
   }
 
@@ -114,16 +127,6 @@ void sampler_cleanup(sampler_t *s) {
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static inline mf_t sampler_mis(const path_t *p)
-{
-  // this is just the hero wavelength weight:
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
-
 // Perform Resampled Importance Sampling (streaming RIS)
 // r is an unused reservoir (will be reset).
 // init_path is an initial path for DI that has only 2 vertices starting from camera, no light source yet.
@@ -132,30 +135,31 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   assert(!(init_path->v[0].mode & s_emit));
 
   // reset
-  r->c = 0;
-  r->w_sum = 0;
-  r->W = 0;
+  r->c = 0.;
+  r->w_sum = 0.;
+  r->W = 0.;
 
   int M = 8;
   for(int k = 0; k < M; k++) {
-    path_t p; // declaring this out of loop creates issues...
-    path_copy(&p, init_path);
+    path_t path; // declaring this out of loop creates issues...
+    path_copy(&path, init_path);
     
     // direct illumination, fails when hitpoint of init_path on envmap
-    if(nee_sample(&p)) continue;
+    if(nee_sample(&path)) continue;
 
-    double w = 1.0/M * path_throughput(&p); // 1/M uniform weights
-    
-    update(r, &p, w, 1); // new independent sample gets confidence = 1
+    md_t w = 0.0;
+    md_t f = p_hat(&path);
+    md_t p = path.v[2].pdf;
+    if(p > 0.0)
+      w = (1.0/M) * (f/p); // 1/M uniform weights
+
+    update(r, &path, w, 1.); // new independent sample gets confidence = 1
   }
 
-  // update contribution weight W (= estimator for 1/f(r.Y)), only fails if all M samples were 0 samples
+  // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
   if(r->w_sum > 0) {
-    r->W = mf_div(mf_set1(r->w_sum), path_throughput(r->path));
+    r->W = r->w_sum / p_hat(r->path);
   }
-
-  // confidence capping, not needed for M = 8
-  //if(r->c > 20) r->c = 20; 
 }
 
 void sampler_create_path(path_t *path)
@@ -183,8 +187,15 @@ void sampler_create_path(path_t *path)
   // combine with existing reservoir
   combine(r, &rris);
 
+  // all 0 samples
+  if(r->w_sum <= 0.) {
+    free(rris.path);
+    return; 
+  }
+  
   // estimator f(r.Y) * r.W
-  pointsampler_splat(r->path, mf_mul(path_throughput(r->path), r->W));
+    // dirty quick fix: multiply by v[0].pdf * v[1].pdf, because r.W is an estimator of only v[2].pdf!
+  pointsampler_splat(r->path, md_2f(f(r->path) * r->W / (path->v[0].pdf * path->v[1].pdf)));
   
   path_copy(path, r->path);
 
