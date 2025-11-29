@@ -46,32 +46,36 @@ static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
   return 0;
 }
 
+// path must be initialized!
 static md_t f(path_t *path) {
-  if(path->length != 3)
-    return 0.0;
+  //if(path->length != 3) 
+  //  return 0.0;
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
 // Use the integrand f as target function p_hat
+// path must be initialized!
 static md_t p_hat(path_t *path) {
-  if(path->length != 3)
-    return 0.0;
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
 static void combine(reservoir_t *s, const reservoir_t *r) {
+  assert(s->c > 0. && r->c > 0.);
 
   md_t w_r = 0.;
   md_t w_s = 0.;
 
+  double mis_r = r->c / (r->c + s->c);
+  double mis_s = s->c / (r->c + s->c);
+
   // if r has a valid sample (otherwise we call p_hat with an uninitialized_path which can give NaN)
   if(r->w_sum > 0.)
-    w_r = 0.5 * p_hat(r->path) * r->W; // assume s and r for same pixel (starting vertex), then f(r.Y) * r.W = r.w_sum
-    //w_r = path_throughput(s->v[0], s->v[1], r->v[2]) * r->W; // f_q(r.Y) * estimate for 1/p_q'(r.Y)
+    w_r = mis_r * p_hat(r->path) * r->W; // assume s and r for same pixel (starting vertex), then f(r.Y) * r.W = r.w_sum
+    //w_r = mis_r * path_throughput(s->v[0], s->v[1], r->v[2]) * r->W; // f_q(r.Y) * estimate for 1/p_q'(r.Y)
   
   // if s has a valid sample
   if(s->w_sum > 0.)
-    w_s = 0.5 * p_hat(s->path) * s->W; // is equal to simply s->w_sum for now...
+    w_s = mis_s * p_hat(s->path) * s->W; // is equal to simply s->w_sum for now...
 
   s->w_sum = w_s;
   update(s, r->path, w_r, r->c);
@@ -134,24 +138,24 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   assert(init_path->length == 2); // only camera vertex and hitpoint
   assert(!(init_path->v[0].mode & s_emit));
 
-  // reset
+  // clean reservoir
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
+  path_t path;
 
   int M = 8;
   for(int k = 0; k < M; k++) {
-    path_t path; // declaring this out of loop creates issues...
     path_copy(&path, init_path);
     
     // direct illumination, fails when hitpoint of init_path on envmap
     if(nee_sample(&path)) continue;
 
     md_t w = 0.0;
-    md_t f = p_hat(&path);
+    md_t phat = p_hat(&path);
     md_t p = path.v[2].pdf;
     if(p > 0.0)
-      w = (1.0/M) * (f/p); // 1/M uniform weights
+      w = (1.0/M) * (phat/p); // 1/M uniform weights
 
     update(r, &path, w, 1.); // new independent sample gets confidence = 1
   }
@@ -177,6 +181,7 @@ void sampler_create_path(path_t *path)
   reservoir_t *r;
   uint64_t i = (uint64_t)path->sensor.pixel_i;
   uint64_t j = (uint64_t)path->sensor.pixel_j;
+  
   r = &rt.sampler->reservoirs[i][j];
 
   // inital candidate generation
@@ -193,8 +198,11 @@ void sampler_create_path(path_t *path)
     return; 
   }
   
+  // lambda shifting
+  //r->path->lambda = spectrum_sample_lambda(fmodf(pointsampler(path, s_dim_lambda), 1.0f), 0);
+
   // estimator f(r.Y) * r.W
-    // dirty quick fix: multiply by v[0].pdf * v[1].pdf, because r.W is an estimator of only v[2].pdf!
+    // quick fix: multiply by 1/(v[0].pdf * v[1].pdf), because r.W is an estimator of only 1/v[2].pdf!
   pointsampler_splat(r->path, md_2f(f(r->path) * r->W / (path->v[0].pdf * path->v[1].pdf)));
   
   path_copy(path, r->path);

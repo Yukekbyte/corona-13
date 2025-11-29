@@ -79,5 +79,5 @@ md_t sampler_sum_pdf_dwp(path_t *p)
 
 void sampler_print_info(FILE *fd)
 {
-  fprintf(fd, "sampler  : ris\n");
+  fprintf(fd, "sampler  : di\n");
 }

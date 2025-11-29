@@ -114,8 +114,8 @@ static mf_t _camera_sample_internal(
 
 mf_t camera_sample(const camera_t *c, path_t *p)
 {
-  const float i = p->sensor.pixel_set ? p->sensor.pixel_i : (pointsampler(p, s_dim_image_x)*view_width());
-  const float j = p->sensor.pixel_set ? p->sensor.pixel_j : (pointsampler(p, s_dim_image_y)*view_height());
+  const float i = p->sensor.pixel_set ? p->sensor.pixel_i : (floorf(pointsampler(p, s_dim_image_x)*view_width()) + 0.5f); // no anti aliasing, floor pixel value and add .5 (middle of pixel)
+  const float j = p->sensor.pixel_set ? p->sensor.pixel_j : (floorf(pointsampler(p, s_dim_image_y)*view_height()) + 0.5f); // no anti aliasing
 
   const float r1 = p->sensor.aperture_set ? p->sensor.aperture_x : pointsampler(p, s_dim_aperture_x);
   const float r2 = p->sensor.aperture_set ? p->sensor.aperture_y : pointsampler(p, s_dim_aperture_y);
