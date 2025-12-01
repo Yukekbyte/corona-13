@@ -21,13 +21,17 @@
 #include "spectrum.h"
 #include "pointsampler.h"
 
+#define set_null(path) ((path)->length = -1)
+#define is_null(path) ((path)->length == -1)
+#define not_null(path) ((path)->length != -1)
+
 // resampled importance sampling
 
 typedef struct reservoir_t {
   path_t *path; // output sample
-  md_t w_sum; // sum of weights
-  double c; // confidence weight of output (= the amount of samples behind the output sample)
-  md_t W; // contribution weight: estimate for 1/p
+  md_t w_sum;   // sum of weights
+  double c;     // confidence weight of output (= the amount of samples behind the output sample)
+  md_t W;       // contribution weight: estimate for 1/p
 } reservoir_t;
 
 typedef struct sampler_t {
@@ -52,14 +56,14 @@ static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
 }
 
 static md_t f(path_t *path) {
-  if(path->length != 3)
+  if(is_null(path))
     return 0.0;
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
 // Use the integrand f as target function p_hat
 static md_t p_hat(path_t *path) {
-  if(path->length != 3)
+  if(is_null(path))
     return 0.0;
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
@@ -71,10 +75,8 @@ static void combine(reservoir_t *s, const reservoir_t *r) {
   // reservoirs can't be empty (although the path in the reservoir can still be the null sample (= uninitialized path))
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs"); return;}
 
-  md_t w_r = 0.;
-  md_t w_s = 0.;
-  md_t phat_r = p_hat(r->path);
-  md_t phat_s = p_hat(s->path);
+  //md_t phat_r = p_hat(r->path);
+  //md_t phat_s = p_hat(s->path);
   //double rm = r->c * phat_r;
   //double sm = s->c * phat_s;
 
@@ -85,25 +87,17 @@ static void combine(reservoir_t *s, const reservoir_t *r) {
   double mis_r = r->c / (s->c + r->c);
   double mis_s = s->c / (s->c + r->c);
 
-
-  // if r has a valid sample (otherwise we call p_hat with an uninitialized_path which can give NaN)
-  if(r->w_sum > 0.) {
-    // TODO: construct path  [ s->v[0], s->v[1], r->v[2] ]
-    w_r = mis_r * phat_r * r->W; // assume s and r for same pixel (starting vertex), then f(r.Y) * r.W = r.w_sum
-    //w_r = mis_r * path_throughput(s->v[0], s->v[1], r->v[2]) * r->W; // f_q(r.Y) * estimate for 1/p_q'(r.Y)
-  }
-  
-  // if s has a valid sample
-  if(s->w_sum > 0.)
-    w_s = mis_s * phat_s * s->W;
+  md_t w_r = mis_r * p_hat(r->path) * r->W; 
+  md_t w_s = mis_s * p_hat(s->path) * s->W;
 
   s->w_sum = w_s;
   update(s, r->path, w_r, r->c);
 
   // update estimator
-  if(s->w_sum > 0.) {
-    s->W = s->w_sum / p_hat(s->path);
-  }
+  if(not_null(s->path))
+    s->W = s->w_sum / p_hat(s->path); // NaN if s->path is null (not really a problem)
+  else
+    s->W = 0.;
 
   // confidence capping
   if(s->c > 20.) s->c = 20.;
@@ -126,8 +120,10 @@ sampler_t *sampler_init() {
     for(j = 0; j < h; j++) {
       r = &s->reservoirs[i][j];
       r->path = (path_t *)malloc(sizeof(path_t));
+      set_null(r->path);
       r->w_sum = 0.;
       r->c = 0.;
+      r->W = 0.;
     }
   }
 
@@ -159,6 +155,7 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   assert(!(init_path->v[0].mode & s_emit));
 
   // reset
+  set_null(r->path);
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
@@ -171,6 +168,9 @@ static void ris(reservoir_t *r, const path_t *init_path) {
     // direct illumination, fails when hitpoint of init_path on envmap
     if(nee_sample(&path)) continue;
 
+    // happens a lot, also in scene with just a lit backpanel
+    if(p_hat(&path) <= 0.) { /*printf("p_hat == 0\n");*/ }
+
     md_t w = 0.0;
     md_t f = p_hat(&path);
     md_t p = path.v[2].pdf;
@@ -181,7 +181,7 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   }
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
-  if(r->w_sum > 0) {
+  if(not_null(r->path)) {
     r->W = r->w_sum / p_hat(r->path);
   }
 }
@@ -211,17 +211,14 @@ void sampler_create_path(path_t *path)
   // combine with existing reservoir
   combine(r, &rris);
 
-  // all 0 samples
-  if(r->w_sum <= 0.) {
+  // don't splat null sample
+  if(is_null(r->path)) {
     free(rris.path);
     return; 
   }
 
-  // lambda shifting
-  // lost code...
-  
   // estimator f(r.Y) * r.W
-    // quick fix: multiply by 1/v[0].pdf * 1/v[1].pdf, because r.W is an estimator of only 1/v[2].pdf!
+    // multiply by 1/v[0].pdf * 1/v[1].pdf, because r.W is an estimator of only 1/v[2].pdf!
   pointsampler_splat(r->path, md_2f(f(r->path) * r->W / (path->v[0].pdf * path->v[1].pdf)));
   
   path_copy(path, r->path);
