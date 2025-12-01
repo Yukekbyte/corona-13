@@ -288,6 +288,9 @@ mf_t path_pdf_extend_adjoint(const path_t *path, int v);
 // reverse a path's vertices, make data consistent.
 void path_reverse(path_t *path, const path_t *input);
 
+// shift the last vertex of path2 onto path1
+int path_shift(path_t *path1, path_t *path2);
+
 // connect two paths, extending path1 by a connection edge and the reverse of path2.
 mf_t path_connect(path_t *path1, const path_t *path2);
 
