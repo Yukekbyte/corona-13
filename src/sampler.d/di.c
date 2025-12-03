@@ -29,10 +29,31 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
+// set pixel of paths ourself to control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
+static void get_pixel(uint64_t index, uint64_t *i, uint64_t *j) {
+  // standard loop through screen pixels:
+  //           w
+  //       0 1 2  3  4
+  //      ------------
+  //    0| 0 3 6 9  12
+  //  h 1| 1 4 7 10 13
+  //    2| 2 5 8 11 14 (15 wraps back to index 0)
+  uint64_t w = view_width();
+  uint64_t h = view_height();
+  *i = (index / h) % w;
+  *j = index % h;
+}
+
 void sampler_create_path(path_t *path)
 {  
-  // init and extend path once to determine pixel on camera and first vertex (stuff handled by pointsampler)
+
+  // get pixel from path index
+  uint64_t i, j;
+  get_pixel(path->index, &i, &j);
+  
+  // extend path once to determine pixel on camera and first vertex
   path_init(path, path->index, path->sensor.camid);
+  path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
   if(path_extend(path)) return;
 
   // direct illumination, fails when first vertex of path landed on envmap
