@@ -497,10 +497,7 @@ int path_shift(path_t *path1, path_t *path2) {
   assert(path1->length >= 2 && path2->length > 0);
   if(path1->length + 1 > PATHSPACE_MAX_VERTS) return 4; 
 
-  //printf("--- Shifting ---\n");
-
   int v = path1->length;
-  //printf("path1 length: %d, path2 length: %d, v: %d\n", path1->length, path2->length, v);
   
   // recalculate edge
   for(int i=0;i<3;i++)
@@ -509,8 +506,6 @@ int path_shift(path_t *path1, path_t *path2) {
   for(int i=0;i<3;i++)
   path1->e[v].omega[i] /= path1->e[v].dist;
   path1->e[v].transmittance = mf_set1(0.0f);
-
-  //printf("dist e[2] = %f\n", path1->e[v].dist);
   
   // append vertex
   memcpy(path1->v+v, path2->v+(path2->length-1), sizeof(vertex_t));
@@ -524,8 +519,6 @@ int path_shift(path_t *path1, path_t *path2) {
   const mf_t bsdf = shader_brdf(path1, v-1);
   if(path_edge_init_volume(path1, v)) return 1;
   mf_t vol = shader_vol_transmittance(path1, v);
-
-  //printf("bsdf: %f\n", bsdf);  
   
   if(bsdf <= 0.0f || (path1->v[v-1].mode & s_specular))
     return 2; // kills specular connections
@@ -541,7 +534,6 @@ int path_shift(path_t *path1, path_t *path2) {
   // evaluate throughput
   const mf_t connect = vol * path_G(path1, v) * bsdf;
   const mf_t throughput = path1->v[v-1].throughput * connect * path2->v[path2->length-1].throughput;
-  //printf("vol: %f, G: %f, connect: %f, v[v-1].throughput: %f, v[v].throughput: %f\n", vol, path_G(path1,v), connect, path1->v[v-1].throughput, path1->v[v].throughput);  
   path1->throughput = throughput;
   return 0;
 }

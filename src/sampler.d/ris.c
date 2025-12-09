@@ -207,7 +207,7 @@ void sampler_create_path(path_t *path)
   get_pixel(path->index, &i, &j);
   r = &rt.sampler->reservoirs[i][j];
   
-  // extend path once to determine pixel on camera and first vertex
+  // extend path once for camera vertex and first hitpoint
   path_init(path, path->index, path->sensor.camid);
   path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
   if(path_extend(path)) return;
