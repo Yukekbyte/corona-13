@@ -497,52 +497,7 @@ int path_shift(path_t *path1, path_t *path2) {
   assert(path1->length >= 2 && path2->length > 0);
   if(path1->length + 1 > PATHSPACE_MAX_VERTS) return 4; 
 
-  //printf("--- Shifting ---\n");
-
-  int v = path1->length;
-  //printf("path1 length: %d, path2 length: %d, v: %d\n", path1->length, path2->length, v);
   
-  // recalculate edge
-  for(int i=0;i<3;i++)
-  path1->e[v].omega[i] = path2->v[v].hit.x[i] - path1->v[v-1].hit.x[i];
-  path1->e[v].dist = sqrtf(dotproduct(path1->e[v].omega, path1->e[v].omega));
-  for(int i=0;i<3;i++)
-  path1->e[v].omega[i] /= path1->e[v].dist;
-  path1->e[v].transmittance = mf_set1(0.0f);
-
-  //printf("dist e[2] = %f\n", path1->e[v].dist);
-  
-  // append vertex
-  memcpy(path1->v+v, path2->v+(path2->length-1), sizeof(vertex_t));
-  path1->length++;
-
-  // set pdf here?
-  path1->v[v].pdf = path_pdf_extend(path1, v);
-  
-  assert(path1->v[v].mode & s_emit); // make sure it's a light source
-  
-  const mf_t bsdf = shader_brdf(path1, v-1);
-  if(path_edge_init_volume(path1, v)) return 1;
-  mf_t vol = shader_vol_transmittance(path1, v);
-
-  //printf("bsdf: %f\n", bsdf);  
-  
-  if(bsdf <= 0.0f || (path1->v[v-1].mode & s_specular))
-    return 2; // kills specular connections
-
-  // Will give bias if not visible
-  if(!path_visible(path1, v)) return 3;
-
-  // fix cached eta rations
-  // necessary? don't know what this is tbh...
-  for(int k=v;k<path1->length;k++)
-    path1->v[v].diffgeo.eta = path_eta_ratio(path1, v);
-
-  // evaluate throughput
-  const mf_t connect = vol * path_G(path1, v) * bsdf;
-  const mf_t throughput = path1->v[v-1].throughput * connect * path2->v[path2->length-1].throughput;
-  //printf("vol: %f, G: %f, connect: %f, v[v-1].throughput: %f, v[v].throughput: %f\n", vol, path_G(path1,v), connect, path1->v[v-1].throughput, path1->v[v].throughput);  
-  path1->throughput = throughput;
   return 0;
 }
 

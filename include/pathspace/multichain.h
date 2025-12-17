@@ -201,101 +201,65 @@ generic_solid_angle:;
 static inline double multichain_perturb(
     path_t *curr,           // current path
     path_t *tent,           // this path will be modified, needs to have inited tent->sensor struct
-    const int begin,        // first vertex (e.g. 0 for start on camera)
+    const int begin,        // first vertex (e.g. 0 for start on camera) // first vertex you want modified
     const int end)          // last moving vertex, end of chain (end + 1 stays fixed)
 {
-  if(end == begin) return 1.0;
-  double T = 1.0;
   // retrace segment (a..b) by lens perturbation + multichain half vector perturbation
   // trace tent path keeping half vectors to re-initialise
   // all hit point infos, medium transactions and to get new error vector
 
   // re-evaluate shading parameters on start point in case wavelength has changed on the outside
-  if(begin == 0)
-  {
-    if(curr->v[0].mode & s_sensor)
-    {
-      shader_exterior_medium(tent);
-      // sensor modified from outside
-      if(!(tent->sensor.pixel_i >= 0 && tent->sensor.pixel_j >= 0 &&
-           tent->sensor.pixel_i < view_width() && tent->sensor.pixel_j < view_height()))
-        return 0.0f;
+  shader_exterior_medium(tent);
 
-      // sample new outgoing direction and corresponding dwp pdf.
-      // G required to convert p(w_1) to p(x_1) cancels with measurement.
-      // we're actually interested in the ratio of perturbation pdf, but
-      // these are composed of p() * J and p() is symmetric.
-      float throughput = view_cam_sample(tent);
-      if(throughput <= 0.0) return 0.0f;
-      T *= view_cam_pdf(curr, 0) / tent->v[1].pdf;
-    }
-    else
-    {
-      shader_prepare(tent, begin);
-      shader_exterior_medium(tent);
-      // mutate outgoing direction on light source, account for change in measurement:
-      T *= multichain_perturb_dwp(curr, tent, 0);
-      if(!(T > 0)) return 0.0;
-    }
-  }
-  else
-  {
-    shader_prepare(tent, begin);
-    T *= multichain_perturb_dwp(curr, tent, begin);
-    if(!(T > 0)) return 0.0;
-    T *= shader_brdf(tent, begin) / shader_brdf(curr, begin);
-    if(!(T > 0)) return 0.0;
-  }
+  // sample new outgoing direction and corresponding dwp pdf.
+  // G required to convert p(w_1) to p(x_1) cancels with measurement.
+  // we're actually interested in the ratio of perturbation pdf, but
+  // these are composed of p() * J and p() is symmetric.
+  float throughput = view_cam_sample(tent);
+  if(throughput <= 0.0) return 0.0f;
+  view_cam_pdf(curr, 0);
 
-  T *= multichain_perturb_distance(curr, tent, 0);
-  if(!(T > 0)) return 0.0;
+  multichain_perturb_distance(curr, tent, 0);
 
   // create segment (a..b) by tracing with slightly perturbed half vectors.
   // loop over vertices in current path. will write to tent->v[v+1].
   for(int v=1;v<end;v++)
   {
-    T *= multichain_perturb_dwp(curr, tent, v);
-    if(!(T > 0)) return 0.0;
-    T *= multichain_perturb_distance(curr, tent, v);
-    if(!(T > 0)) return 0.0;
+    multichain_perturb_dwp(curr, tent, v);
+    multichain_perturb_distance(curr, tent, v);
   }
-  return T * path_measurement_contribution_dwp(tent, begin, end) /
-             path_measurement_contribution_dwp(curr, begin, end);
 }
 
-// same as perturb, but also connect to the fixed vertex end+1.
-// this implements an extended lens perturbation.
+// tent's vertices after v[end] gets shifted to path1
+// tent's vertices before (and including) v[end] keep same vertex on sensor but the rest gets shifted accordingly
 static inline double multichain_perturb_connect(
-    path_t *curr,           // current path
-    path_t *tent,           // this path will be modified, needs to have inited tent->sensor struct
-    const int end)          // last moving vertex, end of chain (end + 1 stays fixed)
+    path_t *curr,         // current path = path1
+    path_t *tent,         // last moving vertex, end of chain (end + 1 stays fixed)
+    int end)
 {
-  assert(end <= curr->length);
+  float pixel_i = tent->sensor.pixel_i;
+  float pixel_j = tent->sensor.pixel_j;
+  float aperture_x = tent->sensor.aperture_x;
+  float aperture_y = tent->sensor.aperture_y;
 
   // TODO: optimise this copy away! apparently we need to set shader id somewhere:
   *tent = *curr;
-  const int tid = common_get_threadid();
-  float g1, g2;
-  const float r1 = points_rand(rt.points, tid);
-  const float r2 = points_rand(rt.points, tid);
-  sample_gaussian(r1, r2, &g1, &g2);
-  const float px = 10.f; // this is one sigma width of the jump
-  tent->sensor.pixel_i += g1 * px;
-  tent->sensor.pixel_j += g2 * px;
-  // mutate point on aperture, after mutating outgoing direction (pixel)
-  tent->sensor.aperture_x = sample_mutate_rand(tent->sensor.aperture_x, points_rand(rt.points, tid), 0.3f);
-  tent->sensor.aperture_y = sample_mutate_rand(tent->sensor.aperture_y, points_rand(rt.points, tid), 0.3f);
+  tent->sensor.pixel_i = pixel_i;
+  tent->sensor.pixel_j = pixel_j;
+  tent->sensor.aperture_x = aperture_x;
+  tent->sensor.aperture_y = aperture_y;
   tent->sensor.aperture_set = 1;
   tent->sensor.pixel_set = 1;
-  tent->lambda = curr->lambda;
+  tent->lambda = curr->lambda; // needed line? isn't it already copied?
   // XXX would need to eval the rest of the path, too!
-  // tent->lambda = spectrum_mutate(curr->lambda, points_rand(rt.points, tid), 0);
+    // we do it because the paths are diffuse atm
+  //tent->lambda = spectrum_sample_lambda(pointsampler(tent, s_dim_lambda), NULL);
+  //tent->lambda = spectrum_mutate(curr->lambda, points_rand(rt.points, common_get_threadid()), 0);
   tent->time = curr->time; // <= TODO
+  //printf("prev lambda: %f, new lambda: %f\n", curr->lambda, tent->lambda);
 
-  double T = multichain_perturb(curr, tent, 0, end);
-  if(end == tent->length) return T; // no connection needed
-  if(!(T > 0.0)) return 0.0;
-  
+  multichain_perturb(curr, tent, 0, end); // respects pixel that you set from outside (lines above)
+    
   // test connection
   tent->v[end+1].mode = curr->v[end+1].mode;
   tent->e[end+1].transmittance = 0.0f;
