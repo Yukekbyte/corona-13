@@ -34,6 +34,7 @@ pointsampler_t *pointsampler_init(uint64_t frame);
 
 // get random number:
 float pointsampler(struct path_t *p, int dim);
+void pointsampler_pixel(uint64_t index, float *pixel_i, float *pixel_j);
 
 void pointsampler_splat(struct path_t *p, mf_t value);
 

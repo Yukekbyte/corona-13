@@ -7,6 +7,7 @@
 #include "view.h"
 #include "pathspace/manifold.h"
 #include "pathspace/tech.h"
+#include "pathspace/halfvec.h"
 #include "lights.h"
 #include <string.h>
 
@@ -492,12 +493,82 @@ void path_reverse(path_t *path, const path_t *input)
   // assert(fabs(f1 - f2) < 1e-1f*fmax(f1, f2));
 }
 
-// shift the last vertex of path2 onto path1
-int path_shift(path_t *path1, path_t *path2) {
-  assert(path1->length >= 2 && path2->length > 0);
-  if(path1->length + 1 > PATHSPACE_MAX_VERTS) return 4; 
+// create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
+int path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, const int end) {
+  assert(source_path->length > end);
 
+  *shifted = *source_path;
+  shifted->sensor.pixel_i = pixel_i;
+  shifted->sensor.pixel_j = pixel_j;
+  shifted->sensor.pixel_set = 1;
+
+  // support for defocusing?
+  //shifted->sensor.aperture_x = source_path->sensor.aperture_x;
+  //shifted->sensor.aperture_y = source_path->sensor.aperture_y;
+  //shifted->sensor.aperture_set = 1;
+
+  // shifting lambda would need to eval the rest of the source path, too!
+  shifted->lambda = source_path->lambda; // needed line? isn't it already copied?
+  shifted->time = source_path->time;
   
+  shader_exterior_medium(shifted);
+  if(view_cam_sample(shifted) <= 0.0f) 
+    return 1; // camera ray failed
+
+  for(int v = 1; v <= end; v++) {
+    shifted->v[v].mode = source_path->v[v].mode;
+    shifted->e[v].transmittance = 0.0f;
+    if(path_propagate(shifted, v, s_propagate_mutate)) 
+      return 2; // propagation failed
+  }
+
+  // project
+  shifted->v[end+1].mode = source_path->v[end+1].mode;
+  shifted->e[end+1].transmittance = 0.0f;
+  
+  // Test 1: propagation failed
+  if (path_project(shifted, end+1, s_propagate_mutate))
+      return 31;
+
+  // Test 2: flags mismatch
+  if (shifted->v[end+1].flags != source_path->v[end+1].flags)
+      return 32;
+
+  // Test 3: surface shader mismatch
+  if (shifted->v[end+1].hit.shader != source_path->v[end+1].hit.shader) {
+    return 33;
+  }
+
+  // Test 4: interior shader mismatch
+  if (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader)
+      return 34;
+
+  // Test 5: primitive validity mismatch
+  if (primid_invalid(shifted->v[end+1].hit.prim) !=
+      primid_invalid(source_path->v[end+1].hit.prim))
+      return 35;
+
+  // if(path_project(shifted, end+1, s_propagate_mutate) ||
+  //     (shifted->v[end+1].flags           != source_path->v[end+1].flags) ||
+  //     (shifted->v[end+1].hit.shader      != source_path->v[end+1].hit.shader) ||
+  //     (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader) ||
+  //     (primid_invalid(shifted->v[end+1].hit.prim) != primid_invalid(source_path->v[end+1].hit.prim))) {
+  //   return 3;
+
+  // check whether we actually arrived at vertex v[end+1]
+  for(int k=0;k<3;k++)
+    if(fabsf(shifted->v[end+1].hit.x[k] - source_path->v[end+1].hit.x[k]) > HALFVEC_REL_SPATIAL_EPS *
+        MAX(MAX(fabsf(shifted->v[end+1].hit.x[k]), fabsf(source_path->v[end+1].hit.x[k])), 1.0))
+      return 4;
+
+  // transform probability to on-surface probability at vertex v
+  shifted->v[end].pdf = mf_mul(shifted->v[end].pdf, path_G(shifted, end));
+
+  // // check visibility
+  // if(!path_visible(shifted, end+1)) {
+  //   return 5;
+  // }
+
   return 0;
 }
 

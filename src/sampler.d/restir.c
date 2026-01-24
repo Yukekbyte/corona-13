@@ -16,7 +16,6 @@
 */
 
 #include "pathspace/nee.h"
-#include "pathspace/multichain.h"
 #include "view.h"
 #include "sampler.h"
 #include "spectrum.h"
@@ -35,6 +34,13 @@ typedef struct reservoir_t {
   md_t W;       // contribution weight: estimate for 1/p
 } reservoir_t;
 
+typedef struct pixel_t {
+  uint64_t i;
+  uint64_t j;
+  float _i;
+  float _j;
+} pixel_t;
+
 typedef struct sampler_t {
   reservoir_t **reservoirs;
 } sampler_t;
@@ -45,24 +51,31 @@ static double random_uniform() {
   return ((double)rand()/(double)RAND_MAX);
 }
 
-// set pixel of paths ourself to control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
-static void get_pixel(const uint64_t index, uint64_t *i, uint64_t *j) {
-  // standard loop through screen pixels:
-  //           w
-  //       0 1 2  3  4
-  //      ------------
-  //    0| 0 3 6 9  12
-  //  h 1| 1 4 7 10 13
-  //    2| 2 5 8 11 14 (15 wraps back to index 0)
-  uint64_t w = view_width();
-  uint64_t h = view_height();
-  *i = (index / h) % w;
-  *j = index % h;
+// set pixel of paths ourself to: 
+// - avoid race conditions between threads by using the halton sequence
+// - control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
+static void get_pixel(const uint64_t index, pixel_t *q, const int set) {
+  if(set) {
+    // // linear sequence
+    // uint64_t w = view_width();
+    // uint64_t h = view_height();
+    // q->i = (index / h) % w;
+    // q->j = index % h;
+
+    // halton sequence
+    pointsampler_pixel(index, &q->_i, &q->_j);
+    q->i = (uint64_t)(q->_i);
+    q->j = (uint64_t)(q->_j);
+  }
+
+  // disable anti-aliasing
+  q->_i = (float)(q->i) + 0.5f;
+  q->_j = (float)(q->j) + 0.5f;
 }
 
-static void path_from_pixel(const uint64_t i, const uint64_t j, path_t *path) {
+static void path_from_pixel(const pixel_t q, path_t *path) {
   path_init(path, 0, 0); // TODO potentially update camid if using other cameras (see sampler_create_path)
-  path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
+  path_set_pixel(path, q._i, q._j);
   path_extend(path);
 }
 
@@ -91,33 +104,50 @@ static md_t p_hat(path_t *path) {
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
-// Perform Resampled Importance Sampling (streaming RIS)
-// r is an unused reservoir (will be reset) 
-// pixel_path is a path for DI with 2 vertices starting from camera.
-static void ris(uint64_t i, uint64_t j, reservoir_t *r) {
-  const int M = 8;
+static md_t p_hat_from(const pixel_t q, path_t *path) {
+  if(is_null(path))
+    return 0.0;
 
+  path_t path_inverted;
+  path_shift(&path_inverted, q._i, q._j, path, 1);
+  // p_hat * J, but jacobian of reconnection shift is 1 here
+  return p_hat(&path_inverted);
+}
+
+// Perform Resampled Importance Sampling (streaming RIS)
+// r will be reset and filled with initial samples for pixel q
+static void ris(const pixel_t q, reservoir_t *r) {
+  
   // reset
   set_null(r->path);
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
-
+  
   path_t path;
-  path_from_pixel(i, j, &path);
-
+  path_from_pixel(q, &path);
+  
   // early return when path on envmap
   if(path.v[path.length-1].flags & s_environment) {
     // give r no confidence but manually update r->path
-    // this means r->path is not a null sample but r->c is zero! (dangerous case...)
+    // this means r->path is not a null sample but r->c is zero! (tricky case...)
     path_copy(r->path, &path);
     return;
   }
-
+  
+  const int M = 8;
   for(int k = 0; k < M; k++) {
 
-    // direct illumination, fails when hitpoint on envmap
-    if(nee_sample(&path)) continue;
+    // direct illumination
+    if(nee_sample(&path)) {
+      r->c += 1.; // fast update when sampling fails
+      continue;
+    }
+
+    // if(!path_visible(&path, 2)) {
+    //   r->c += 1.;
+    //   continue;
+    // }
 
     md_t w = 0.0;
     md_t f = p_hat(&path);
@@ -133,59 +163,39 @@ static void ris(uint64_t i, uint64_t j, reservoir_t *r) {
   if(not_null(r->path)) {
     r->W = r->w_sum / p_hat(r->path);
   }
+
 }
 
-// Combine reservoir r with s.
-// r->path will be shifted to the pixel (i,j) before combining
-// s->path is assumed to already go through (i,j)
-static void combine(uint64_t i, uint64_t j, reservoir_t *s, const reservoir_t *r) {
-  // can't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
+// Combine reservoir s with r.
+// The sample in r (r->path) will be shifted to the domain (pixel) of the sample in s (s->path).
+static void combine(const pixel_t qs, reservoir_t *s, pixel_t const qr, const reservoir_t *r) {
+  // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
   if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
 
   // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return;}
 
-  // shifted r->path
-  path_t shifted;
+  // shift r's path to s's domain
+  path_t r_path_from_qs;
+  if(is_null(r->path) || 
+     path_shift(&r_path_from_qs, qs._i, qs._j, r->path, 1))
+    set_null(&r_path_from_qs);
+  path_t s_path_from_qr;
+  if(is_null(s->path) || 
+     path_shift(&s_path_from_qr, qr._i, qr._j, s->path, 1))
+    set_null(&s_path_from_qr);
 
-  if(not_null(r->path)) {
-    path_from_pixel(i, j, &shifted);
-
-    multichain_perturb_connect(r->path, &shifted, 1);
-    if(i == 800 && j == 200)
-      printf("------(1) shifted->v[1].pdf = %f, r->path->v[1].pdf = %f, s->path->v[1].pdf = %f\n", shifted.v[1].pdf, r->path->v[1].pdf, s->path->v[1].pdf);
-    // transform probability to on-surface probability at vertex v
-    shifted.v[1].pdf = mf_mul(shifted.v[1].pdf, path_G(&shifted, 1));
-    if(i == 800 && j == 200)
-      printf("------(2) shifted->v[1].pdf = %f, r->path->v[1].pdf = %f, s->path->v[1].pdf = %f\n", shifted.v[1].pdf, r->path->v[1].pdf, s->path->v[1].pdf);
-  }
-  else {
-    set_null(&shifted);
-  }
-
-  if(i == 800 && j == 200){
-      printf("--- r->path ---\n");
-      path_print(r->path, stdout);
-      // printf("--- s->path ---\n");
-      // path_print(s->path, stdout);
-      printf("--- shifted ---\n");
-      path_print(&shifted, stdout);
-      printf("\n");
-
-      printf("shifted f: %f, shifted->v[1].pdf = %f\n", f(&shifted), shifted.v[1].pdf);
-      printf("r->path Estimator: %f, f: %f, W: %f, 1/v[0].pdf: %f, 1/v[1].pdf: %f\n", md_2f(f(r->path) * r->W / (r->path->v[0].pdf * r->path->v[1].pdf)),
-                                                                              f(r->path), r->W, 1/r->path->v[0].pdf, 1/r->path->v[1].pdf);
-    }
-  
   // calculate weights
-  double mis_s = s->c / (s->c + r->c);
-  double mis_r = r->c / (s->c + r->c);
-  md_t w_r = mis_r * p_hat(&shifted) * r->W;
+  //md_t mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path) + s->c * p_hat(&s_path_from_qr));
+  md_t mis_r = r->c * p_hat(&r_path_from_qs) / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
+  md_t mis_s = s->c * p_hat(s->path)         / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
+
+  md_t w_r = mis_r * p_hat(&r_path_from_qs) * r->W;
   md_t w_s = mis_s * p_hat(s->path) * s->W;
   
   // combine reservoirs in s
   s->w_sum = w_s;
-  update(s, &shifted, w_r, r->c);
+  update(s, &r_path_from_qs, w_r, r->c);
 
   // update estimator
   if(not_null(s->path))
@@ -194,41 +204,42 @@ static void combine(uint64_t i, uint64_t j, reservoir_t *s, const reservoir_t *r
     s->W = 0.;
   
   // confidence capping
-  if(s->c > 20.) s->c = 20.;
+  if(s->c > 100.) s->c = 100.;
 }
 
-static reservoir_t *random_neighbor(uint64_t i, uint64_t j, path_t *path) {
+static void random_neighbor(const pixel_t q, const path_t *path, reservoir_t **n, pixel_t *q_n) {
   uint64_t w = view_width();
   uint64_t h = view_height();
 
   int l, m; // int instead of uint64_t so they can be negative (important for clamping)
-  reservoir_t *r;
 
-  const int d = 5; // sample in 20x20 square around (i, j)
+  const int d = 10; // sample in 10x10 square around (i, j)
   const int MAX_ATTEMPTS = 10; // when i == l && j == m or neighbor not geometrically similar enough
   for(int k = 0; k < MAX_ATTEMPTS; k++) {
     // TODO: make edge clamping uniform probablility
-    l = i + (2*d*random_uniform() - d);
-    m = j + (2*d*random_uniform() - d);
+    l = q.i + (2*d*random_uniform() - d);
+    m = q.j + (2*d*random_uniform() - d);
 
     l = CLAMP(l, 0, w-1);
     m = CLAMP(m, 0, h-1);
 
-    uint64_t ni = (uint64_t)l;
-    uint64_t nj = (uint64_t)m;
+    q_n->i = (uint64_t)l;
+    q_n->j = (uint64_t)m;
 
-    assert(ni < w && nj < h);
+    if(q_n->i == q.i && q_n->j == q.j) continue;
 
-    if(ni == i && nj == j) continue;
+    // TODO: filter geometric similarity
+    // r->path->v[1] must be similar to path->v[1]
 
-    r = &rt.sampler->reservoirs[ni][nj];
-    
-    // geometric similarity (only for biased version)
-    // TODO: r->path->v[1] must be similar to path->v[1]
-    return r;
+    *n = &rt.sampler->reservoirs[q_n->i][q_n->j];
+    get_pixel(0, q_n, 0); // only set _i, and _j
+
+    return;
   }
 
-  return &rt.sampler->reservoirs[i][j]; // return same reservoir
+  *n = &rt.sampler->reservoirs[q.i][q.j]; // failed: return same reservoir
+  // q_n unchanged
+  return;
 }
     
 sampler_t *sampler_init() {
@@ -274,19 +285,22 @@ void sampler_cleanup(sampler_t *s) {
 }
 
 void sampler_prepare_frame(sampler_t *s) { 
-  uint64_t i, j;
   uint64_t w = view_width();
   uint64_t h = view_height();
+  uint64_t i, j;
+  pixel_t q;
   
-  printf("[ReSTIR] initial RIS\n");
-  
-  // for each i, j on screen, perform initial RIS
-  for(i = 0; i < w; i++)
+  // for each pixel on screen, perform initial RIS
+  for(i = 0; i < w; i++) {
     for(j = 0; j < h; j++) {
-      ris(i, j, &rt.sampler->reservoirs[i][j]);
+      q.i = i;
+      q.j = j;
+      //q._i = (float)(i) + 0.5f;
+      //q._j = (float)(j) + 0.5f;
+      get_pixel(0, &q, 0); // only set _i, and _j
+      ris(q, &s->reservoirs[i][j]);
     }
-
-  printf("[ReSTIR] done\n");
+  }
 }
 
 void sampler_clear(sampler_t *s) {}
@@ -294,26 +308,51 @@ void sampler_clear(sampler_t *s) {}
 void sampler_create_path(path_t *path)
 {  
   // get pixel & reservoir from path index
-  uint64_t i, j;
   reservoir_t *r;
-  get_pixel(path->index, &i, &j);
-  r = &rt.sampler->reservoirs[i][j];
+  pixel_t q;
+  get_pixel(path->index, &q, 1);
+  r = &rt.sampler->reservoirs[q.i][q.j];
   r->path->index = path->index;
-  r->path->sensor.camid = path->sensor.camid; // TODO potentially if using other cameras (see path_from_pixel)
-  
+  //r->path->sensor.camid = path->sensor.camid; // TODO potentially if using other cameras (see path_from_pixel)
+
+  if(not_null(r->path)) {
+    assert(r->path->sensor.pixel_i == q._i);
+    assert(r->path->sensor.pixel_j == q._j);
+  }
+
+  // generate initial candidates
+  //ris(q, r); //done in sampler_prepare_frame()
+
   // check for env map hit
-  if(r->path->v[r->path->length-1].flags & s_environment) {
+  if(not_null(r->path) && r->path->v[r->path->length-1].flags & s_environment) {
     pointsampler_splat(r->path, path_throughput(r->path));
     path_copy(path, r->path);
     return;
   }
 
+  #if(0)
   // spatial re-use
-  const int neighbors = 5;
+  const int neighbors = 3;
+  {
+  reservoir_t neighbor;
+  reservoir_t *n;
+  pixel_t q_n;
+  neighbor.path = (path_t *)malloc(sizeof(path_t));
+
   for(int k = 0; k < neighbors; k++) {
-    // TODO: pick neighbors without replacement
-    combine(i, j, r, random_neighbor(i, j, r->path));
+    // TODO: pick neighbors with low discrepancy sequence
+    random_neighbor(q, r->path, &n, &q_n);
+    neighbor.w_sum = n->w_sum;
+    neighbor.c = n->c; 
+    neighbor.W = n->W;
+    path_copy(neighbor.path, n->path); // copy to avoid race conditions/dirty reads (still not fully bullet proof as the path can have changed between w_sum copy and now)
+    
+    combine(q, r, q_n, &neighbor);
   }
+
+  free(neighbor.path);
+  }
+  #endif
 
   // don't splat null sample
   if(is_null(r->path)) return;

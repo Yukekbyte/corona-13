@@ -31,22 +31,19 @@ void sampler_clear(sampler_t *s) {}
 
 // set pixel of paths ourself to control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
 static void get_pixel(uint64_t index, uint64_t *i, uint64_t *j) {
-  // standard loop through screen pixels:
-  //           w
-  //       0 1 2  3  4
-  //      ------------
-  //    0| 0 3 6 9  12
-  //  h 1| 1 4 7 10 13
-  //    2| 2 5 8 11 14 (15 wraps back to index 0)
-  uint64_t w = view_width();
-  uint64_t h = view_height();
-  *i = (index / h) % w;
-  *j = index % h;
+  // uint64_t w = view_width();
+  // uint64_t h = view_height();
+  // *i = (index / h) % w;
+  // *j = index % h;
+  // halton sequence
+  float pixel_i, pixel_j;
+  pointsampler_pixel(index, &pixel_i, &pixel_j);
+  *i = (uint64_t)(pixel_i);
+  *j = (uint64_t)(pixel_j);
 }
 
 void sampler_create_path(path_t *path)
 {  
-
   // get pixel from path index
   uint64_t i, j;
   get_pixel(path->index, &i, &j);
@@ -56,7 +53,7 @@ void sampler_create_path(path_t *path)
   path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
   if(path_extend(path)) return;
 
-  // direct illumination, fails when first vertex of path landed on envmap
+  // direct illumination
   if(nee_sample(path)) return;
 
   md_t f = path_measurement_contribution_dx(path, 0, path->length-1);

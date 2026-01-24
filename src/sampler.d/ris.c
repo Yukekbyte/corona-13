@@ -168,7 +168,7 @@ void sampler_clear(sampler_t *s) {}
 // init_path is an initial path for DI that has only 2 vertices starting from camera, no light source yet.
 static void ris(reservoir_t *r, const path_t *init_path) {
   assert(init_path->length == 2); // only camera vertex and hitpoint
-  assert(!(init_path->v[0].mode & s_emit));
+  assert(!(init_path->v[2].flags & s_environment));
 
   // reset
   set_null(r->path);
@@ -181,8 +181,11 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   for(int k = 0; k < M; k++) {
     path_copy(&path, init_path);
     
-    // direct illumination, fails when hitpoint of init_path on envmap
-    if(nee_sample(&path)) continue;
+    // direct illumination
+    if(nee_sample(&path)) {
+      r->c += 1.; // fast update when sampling fails, e.g. sample not visible or brdf=0
+      continue;
+    }
 
     md_t w = 0.0;
     md_t f = p_hat(&path);
@@ -219,16 +222,16 @@ void sampler_create_path(path_t *path)
   }
 
   // inital candidate generation
-  reservoir_t rris;
-  rris.path = (path_t*)malloc(sizeof(path_t));
-  ris(&rris, path);
+  //reservoir_t rris;
+  //rris.path = (path_t*)malloc(sizeof(path_t));
+  ris(r, path);
 
   // combine with existing reservoir
-  combine(r, &rris);
+  //combine(r, &rris);
 
   // don't splat null sample
   if(is_null(r->path)) {
-    free(rris.path);
+    //free(rris.path);
     return; 
   }
 
@@ -238,7 +241,7 @@ void sampler_create_path(path_t *path)
   
   path_copy(path, r->path);
 
-  free(rris.path);
+  //free(rris.path);
 }
 
 mf_t sampler_throughput(path_t *path)
