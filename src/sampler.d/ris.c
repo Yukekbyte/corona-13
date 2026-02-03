@@ -84,41 +84,6 @@ static md_t p_hat(path_t *path) {
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
-static void combine(reservoir_t *s, const reservoir_t *r) {
-  // can't combine reservoir with itself (happens when random_neighbor fails for example)
-  if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
-
-  // reservoirs can't be empty (although the path in the reservoir can still be the null sample (= uninitialized path))
-  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs"); return;}
-
-  // md_t phat_r = p_hat(r->path);
-  // md_t phat_s = p_hat(s->path);
-  // double rm = r->c * phat_r;
-  // double sm = s->c * phat_s;
-
-  // bias! how?
-  // double mis_r = (rm + sm) > 0. ? rm/(rm+sm) : 0.;
-  // double mis_s = (rm + sm) > 0. ? sm/(rm+sm) : 0.;
-  //printf("rm %f, sm %f, mis_r %f, mis_s %f\n", rm, sm, mis_r, mis_s);
-  double mis_r = r->c / (s->c + r->c);
-  double mis_s = s->c / (s->c + r->c);
-
-  md_t w_r = mis_r * p_hat(r->path) * r->W; 
-  md_t w_s = mis_s * p_hat(s->path) * s->W;
-
-  s->w_sum = w_s;
-  update(s, r->path, w_r, r->c);
-
-  // update estimator
-  if(not_null(s->path))
-    s->W = s->w_sum / p_hat(s->path); // NaN if s->path is null (not really a problem)
-  else
-    s->W = 0.;
-
-  // confidence capping
-  if(s->c > 20.) s->c = 20.;
-}
-
 sampler_t *sampler_init() {
   uint64_t i, j;
   uint64_t w = view_width(); // 1024 (standard)
@@ -182,6 +147,11 @@ static void ris(reservoir_t *r, const path_t *init_path) {
     path_copy(&path, init_path);
     
     // direct illumination
+    int s = path_extend(&path);
+    if(s) {
+      r->c += 1.; // fast update when sampling fails
+      continue;
+    }
     if(nee_sample(&path)) {
       r->c += 1.; // fast update when sampling fails, e.g. sample not visible or brdf=0
       continue;
@@ -189,7 +159,7 @@ static void ris(reservoir_t *r, const path_t *init_path) {
 
     md_t w = 0.0;
     md_t f = p_hat(&path);
-    md_t p = path.v[2].pdf;
+    md_t p = path_pdf(&path);
     if(p > 0.0)
       w = (1.0/M) * (f/p); // 1/M uniform weights
 
@@ -222,26 +192,17 @@ void sampler_create_path(path_t *path)
   }
 
   // inital candidate generation
-  //reservoir_t rris;
-  //rris.path = (path_t*)malloc(sizeof(path_t));
   ris(r, path);
-
-  // combine with existing reservoir
-  //combine(r, &rris);
 
   // don't splat null sample
   if(is_null(r->path)) {
-    //free(rris.path);
     return; 
   }
 
   // estimator f(r.Y) * r.W
-    // multiply by 1/v[0].pdf * 1/v[1].pdf, because r.W is an estimator of only 1/v[2].pdf!
-  pointsampler_splat(r->path, md_2f(f(r->path) * r->W / (r->path->v[0].pdf * r->path->v[1].pdf)));
+  pointsampler_splat(r->path, md_2f(f(r->path) * r->W));
   
   path_copy(path, r->path);
-
-  //free(rris.path);
 }
 
 mf_t sampler_throughput(path_t *path)

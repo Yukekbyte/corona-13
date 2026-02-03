@@ -20,6 +20,7 @@
 #include "sampler.h"
 #include "spectrum.h"
 #include "pointsampler.h"
+#include "pathspace/multichain.h"
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
@@ -84,7 +85,7 @@ static void path_from_pixel(const pixel_t q, path_t *path) {
 static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
   r->w_sum += weight;
   r->c += c;
-  if (random_uniform() < weight / r->w_sum) {
+  if (random_uniform() * r->w_sum < weight) {
     path_copy(r->path, path);
     return 1;
   }
@@ -141,17 +142,19 @@ static void ris(const pixel_t q, reservoir_t *r) {
     // direct illumination
     if(nee_sample(&path)) {
       r->c += 1.; // fast update when sampling fails
+      if(path.length > 2) path_pop(&path);
       continue;
     }
 
-    // if(!path_visible(&path, 2)) {
-    //   r->c += 1.;
-    //   continue;
-    // }
+    if(!path_visible(&path, 2)) {
+      r->c += 1.;
+      path_pop(&path);
+      continue;
+    }
 
     md_t w = 0.0;
     md_t f = p_hat(&path);
-    md_t p = path.v[2].pdf;
+    md_t p = path_pdf(&path);
     if(p > 0.0)
       w = (1.0/M) * (f/p); // 1/M uniform weights
 
@@ -173,24 +176,44 @@ static void combine(const pixel_t qs, reservoir_t *s, pixel_t const qr, const re
   if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
 
   // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
-  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return;}
+  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
 
   // shift r's path to s's domain
   path_t r_path_from_qs;
-  if(is_null(r->path) || 
-     path_shift(&r_path_from_qs, qs._i, qs._j, r->path, 1))
+  double Jr = 0.0;
+  
+  if(is_null(r->path))
     set_null(&r_path_from_qs);
-  path_t s_path_from_qr;
-  if(is_null(s->path) || 
-     path_shift(&s_path_from_qr, qr._i, qr._j, s->path, 1))
-    set_null(&s_path_from_qr);
+  else {
+    Jr = path_shift(&r_path_from_qs, qs._i, qs._j, r->path, 1);
+    //Jr = multichain_perturb_connect_v2(r->path, &r_path_from_qs, qs._i, qs._j, 1);
+    if(Jr == 0.0)
+      set_null(&r_path_from_qs);
+  }
+  
+  // path_t s_path_from_qr;
+  // double Js = 0.0;
+  // if(is_null(s->path))
+  //   set_null(&s_path_from_qr);
+  // else {
+  //   Js = path_shift(&s_path_from_qr, qr._i, qr._j, s->path, 1);
+  //   if(Js == 0.0)
+  //     set_null(&s_path_from_qr);
+  // }
 
   // calculate weights
-  //md_t mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path) + s->c * p_hat(&s_path_from_qr));
-  md_t mis_r = r->c * p_hat(&r_path_from_qs) / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
-  md_t mis_s = s->c * p_hat(s->path)         / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
+  // r's MIS weight in s domain
+  // md_t mis_r = r->c * p_hat(&r_path_from_qs) / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
+  // r's MIS weight in r domain
+  // md_t mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path)         + s->c * p_hat(&s_path_from_qr));
+  
+  // s's MIS weight in s domain
+  // md_t mis_s = s->c * p_hat(s->path) / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
 
-  md_t w_r = mis_r * p_hat(&r_path_from_qs) * r->W;
+  md_t mis_r = (r->c) / (s->c + r->c);
+  md_t mis_s = (s->c) / (s->c + r->c);
+
+  md_t w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
   md_t w_s = mis_s * p_hat(s->path) * s->W;
   
   // combine reservoirs in s
@@ -330,7 +353,7 @@ void sampler_create_path(path_t *path)
     return;
   }
 
-  #if(0)
+  #if(1)
   // spatial re-use
   const int neighbors = 3;
   {
@@ -358,8 +381,7 @@ void sampler_create_path(path_t *path)
   if(is_null(r->path)) return;
 
   // estimator f(r.Y) * r.W
-    // multiply by 1/v[0].pdf * 1/v[1].pdf, because r.W is an estimator of only 1/v[2].pdf!
-  pointsampler_splat(r->path, md_2f(f(r->path) * r->W / (r->path->v[0].pdf * r->path->v[1].pdf)));
+  pointsampler_splat(r->path, md_2f(f(r->path) * r->W));
   
   path_copy(path, r->path);
 }
@@ -397,5 +419,5 @@ md_t sampler_sum_pdf_dwp(path_t *p)
 
 void sampler_print_info(FILE *fd)
 {
-  fprintf(fd, "sampler  : ris\n");
+  fprintf(fd, "sampler  : restir\n");
 }

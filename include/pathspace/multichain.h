@@ -201,40 +201,6 @@ generic_solid_angle:;
 static inline double multichain_perturb(
     path_t *curr,           // current path
     path_t *tent,           // this path will be modified, needs to have inited tent->sensor struct
-    const int begin,        // first vertex (e.g. 0 for start on camera) // first vertex you want modified
-    const int end)          // last moving vertex, end of chain (end + 1 stays fixed)
-{
-  // retrace segment (a..b) by lens perturbation + multichain half vector perturbation
-  // trace tent path keeping half vectors to re-initialise
-  // all hit point infos, medium transactions and to get new error vector
-
-  // re-evaluate shading parameters on start point in case wavelength has changed on the outside
-  shader_exterior_medium(tent);
-
-  // sample new outgoing direction and corresponding dwp pdf.
-  // G required to convert p(w_1) to p(x_1) cancels with measurement.
-  // we're actually interested in the ratio of perturbation pdf, but
-  // these are composed of p() * J and p() is symmetric.
-  float throughput = view_cam_sample(tent);
-  if(throughput <= 0.0) return 0.0f;
-  view_cam_pdf(curr, 0);
-
-  multichain_perturb_distance(curr, tent, 0);
-
-  // create segment (a..b) by tracing with slightly perturbed half vectors.
-  // loop over vertices in current path. will write to tent->v[v+1].
-  for(int v=1;v<end;v++)
-  {
-    multichain_perturb_dwp(curr, tent, v);
-    multichain_perturb_distance(curr, tent, v);
-  }
-}
-
-// tent's vertices after v[end] gets shifted to path1
-// tent's vertices before (and including) v[end] keep same vertex on sensor but the rest gets shifted accordingly
-static inline double multichain_perturb(
-    path_t *curr,           // current path
-    path_t *tent,           // this path will be modified, needs to have inited tent->sensor struct
     const int begin,        // first vertex (e.g. 0 for start on camera)
     const int end)          // last moving vertex, end of chain (end + 1 stays fixed)
 {
@@ -364,4 +330,73 @@ static inline double multichain_perturb_connect(
   // nan-check:
   if(!(T >= 0.0)) return 0.0;
   return T;
+}
+
+
+static inline double multichain_perturb_connect_v2(
+    path_t *curr,           // current path
+    path_t *tent,           // this path will be modified, needs to have inited tent->sensor struct
+    float pixel_i,
+    float pixel_j,
+    const int end)          // last moving vertex, end of chain (end + 1 stays fixed)
+{
+  assert(end <= curr->length);
+
+  // TODO: optimise this copy away! apparently we need to set shader id somewhere:
+  *tent = *curr;
+  const int tid = common_get_threadid();
+  tent->sensor.pixel_i = pixel_i;
+  tent->sensor.pixel_j = pixel_j;
+  // mutate point on aperture, after mutating outgoing direction (pixel)
+  tent->sensor.aperture_x = sample_mutate_rand(tent->sensor.aperture_x, points_rand(rt.points, tid), 0.3f);
+  tent->sensor.aperture_y = sample_mutate_rand(tent->sensor.aperture_y, points_rand(rt.points, tid), 0.3f);
+  tent->sensor.aperture_set = 1;
+  tent->sensor.pixel_set = 1;
+  tent->lambda = curr->lambda;
+  // XXX would need to eval the rest of the path, too!
+  // tent->lambda = spectrum_mutate(curr->lambda, points_rand(rt.points, tid), 0);
+  tent->time = curr->time; // <= TODO
+
+  double T = multichain_perturb(curr, tent, 0, end);
+  if(end == tent->length) return T; // no connection needed
+  if(!(T > 0.0)) return 0.0;
+  
+  // test connection
+  tent->v[end+1].mode = curr->v[end+1].mode;
+  tent->e[end+1].transmittance = 0.0f;
+  if(path_project(tent, end+1, s_propagate_mutate) ||
+      (tent->v[end+1].flags           != curr->v[end+1].flags) ||
+      (tent->v[end+1].hit.shader      != curr->v[end+1].hit.shader) ||
+      (tent->v[end+1].interior.shader != curr->v[end+1].interior.shader) ||
+      (primid_invalid(tent->v[end+1].hit.prim) != primid_invalid(curr->v[end+1].hit.prim))) 
+    return 0.0f;
+
+  // check whether we actually arrived at vertex c
+  for(int k=0;k<3;k++)
+    if(fabsf(tent->v[end+1].hit.x[k] - curr->v[end+1].hit.x[k]) > HALFVEC_REL_SPATIAL_EPS *
+        MAX(MAX(fabsf(tent->v[end+1].hit.x[k]), fabsf(curr->v[end+1].hit.x[k])), 1.0))
+      return 0.0f;
+  T *= shader_brdf(tent, end) * shader_vol_transmittance(tent, end+1) * path_G(tent, end+1);
+  T /= shader_brdf(curr, end) * shader_vol_transmittance(curr, end+1) * path_G(curr, end+1);
+  // T *= shader_vol_transmittance(tent, end+1);// * path_G(tent, end+1);
+  // T /= shader_vol_transmittance(curr, end+1);// * path_G(curr, end+1);
+  // return T;// XXX the below seems to not work (always rejects)
+  shader_prepare(tent, end+1); // potentially update due to direction/wavelength change
+  if(end+1 == tent->length-1)
+  {
+    T *= lights_eval_vertex(tent, tent->length-1);
+    T /= lights_eval_vertex(curr, curr->length-1);
+  }
+  else
+  {
+    T *= shader_brdf(tent, end+1);
+    T /= shader_brdf(curr, end+1);
+  }
+  // nan-check:
+  if(!(T >= 0.0)) return 0.0;
+
+  float ten = path_lambert(tent, end, tent->e[end].omega) / (tent->e[end].dist * tent->e[end].dist);
+  float cur = path_lambert(curr, end, curr->e[end].omega) / (curr->e[end].dist * curr->e[end].dist);
+  if(ten == 0.0f) return 0.0f;
+  return cur / ten;
 }

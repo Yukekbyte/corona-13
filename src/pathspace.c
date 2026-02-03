@@ -186,12 +186,12 @@ int path_extend(path_t *path)
   // regular inner path vertex?
   if(path->length)
   {
-    if(path->v[v-1].flags & s_environment) return 1;
+    if(path->v[v-1].flags & s_environment) return 2;
     if(!mf_any(mf_gt(path->v[v-1].throughput, mf_set1(0.0f))))
     {
       path->v[v-1].throughput = mf_set1(0.0f);
       path->v[v-1].mode = s_absorb;
-      return 1;
+      return 3;
     }
 
     // 1) sample bsdf
@@ -258,7 +258,7 @@ int path_extend(path_t *path)
     if(!(path->v[v-1].mode & s_emit)) // only set to absorption in case we didn't try to reflect off a light source.
       path->v[v-1].mode = s_absorb;   // the emit flag we'd like to keep.
     path->v[v].throughput = mf_set1(-0.0f);
-    return 1; // return without incrementing path length.
+    return 4; // return without incrementing path length.
   }
 
   // transform probability to on-surface probability at vertex v
@@ -494,7 +494,7 @@ void path_reverse(path_t *path, const path_t *input)
 }
 
 // create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
-int path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, const int end) {
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, const int end) {
   assert(source_path->length > end);
 
   *shifted = *source_path;
@@ -507,69 +507,48 @@ int path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *sour
   //shifted->sensor.aperture_y = source_path->sensor.aperture_y;
   //shifted->sensor.aperture_set = 1;
 
-  // shifting lambda would need to eval the rest of the source path, too!
+  // shifting lambda would need to re-eval the rest of the source path too
   shifted->lambda = source_path->lambda; // needed line? isn't it already copied?
   shifted->time = source_path->time;
   
   shader_exterior_medium(shifted);
   if(view_cam_sample(shifted) <= 0.0f) 
-    return 1; // camera ray failed
+    return 0.0; // camera ray failed
 
   for(int v = 1; v <= end; v++) {
     shifted->v[v].mode = source_path->v[v].mode;
     shifted->e[v].transmittance = 0.0f;
     if(path_propagate(shifted, v, s_propagate_mutate)) 
-      return 2; // propagation failed
+      return 0.0; // propagation failed
   }
 
   // project
   shifted->v[end+1].mode = source_path->v[end+1].mode;
   shifted->e[end+1].transmittance = 0.0f;
   
-  // Test 1: propagation failed
-  if (path_project(shifted, end+1, s_propagate_mutate))
-      return 31;
-
-  // Test 2: flags mismatch
-  if (shifted->v[end+1].flags != source_path->v[end+1].flags)
-      return 32;
-
-  // Test 3: surface shader mismatch
-  if (shifted->v[end+1].hit.shader != source_path->v[end+1].hit.shader) {
-    return 33;
+  if(path_project(shifted, end+1, s_propagate_mutate) ||
+      (shifted->v[end+1].flags           != source_path->v[end+1].flags) ||
+      (shifted->v[end+1].hit.shader      != source_path->v[end+1].hit.shader) ||
+      (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader) ||
+      (primid_invalid(shifted->v[end+1].hit.prim) != primid_invalid(source_path->v[end+1].hit.prim))) {
+    return 0.0;
   }
-
-  // Test 4: interior shader mismatch
-  if (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader)
-      return 34;
-
-  // Test 5: primitive validity mismatch
-  if (primid_invalid(shifted->v[end+1].hit.prim) !=
-      primid_invalid(source_path->v[end+1].hit.prim))
-      return 35;
-
-  // if(path_project(shifted, end+1, s_propagate_mutate) ||
-  //     (shifted->v[end+1].flags           != source_path->v[end+1].flags) ||
-  //     (shifted->v[end+1].hit.shader      != source_path->v[end+1].hit.shader) ||
-  //     (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader) ||
-  //     (primid_invalid(shifted->v[end+1].hit.prim) != primid_invalid(source_path->v[end+1].hit.prim))) {
-  //   return 3;
 
   // check whether we actually arrived at vertex v[end+1]
   for(int k=0;k<3;k++)
     if(fabsf(shifted->v[end+1].hit.x[k] - source_path->v[end+1].hit.x[k]) > HALFVEC_REL_SPATIAL_EPS *
         MAX(MAX(fabsf(shifted->v[end+1].hit.x[k]), fabsf(source_path->v[end+1].hit.x[k])), 1.0))
-      return 4;
-
-  // transform probability to on-surface probability at vertex v
-  shifted->v[end].pdf = mf_mul(shifted->v[end].pdf, path_G(shifted, end));
-
+      return 0.0;
+  
   // // check visibility
   // if(!path_visible(shifted, end+1)) {
-  //   return 5;
+  //   return 0.0;
   // }
 
-  return 0;
+  float shif = path_lambert(shifted, end, shifted->e[end].omega) / (shifted->e[end].dist * shifted->e[end].dist);
+  float sour = path_lambert(source_path, end, source_path->e[end].omega) / (source_path->e[end].dist * source_path->e[end].dist);
+  if(shif == 0.0f) return 0.0f;
+  return sour / shif;
 }
 
 // connect two paths, extending path1 by a connection edge and the reverse of path2.
