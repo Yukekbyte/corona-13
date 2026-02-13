@@ -26,7 +26,7 @@
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
 
-// resampled importance sampling
+// Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
 typedef struct reservoir_t {
   path_t *path; // output sample
@@ -110,9 +110,8 @@ static md_t p_hat_from(const pixel_t q, path_t *path) {
     return 0.0;
 
   path_t path_inverted;
-  path_shift(&path_inverted, q._i, q._j, path, 1);
-  // p_hat * J, but jacobian of reconnection shift is 1 here
-  return p_hat(&path_inverted);
+  float J = path_shift(&path_inverted, q._i, q._j, path, 1);
+  return p_hat(&path_inverted) * J;
 }
 
 // Perform Resampled Importance Sampling (streaming RIS)
@@ -146,11 +145,11 @@ static void ris(const pixel_t q, reservoir_t *r) {
       continue;
     }
 
-    if(!path_visible(&path, 2)) {
-      r->c += 1.;
-      path_pop(&path);
-      continue;
-    }
+    // if(!path_visible(&path, 2)) {
+    //   r->c += 1.;
+    //   path_pop(&path);
+    //   continue;
+    // }
 
     md_t w = 0.0;
     md_t f = p_hat(&path);
@@ -165,8 +164,16 @@ static void ris(const pixel_t q, reservoir_t *r) {
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
   if(not_null(r->path)) {
     r->W = r->w_sum / p_hat(r->path);
+  } 
+}
+
+float path_shift_wrapper(path_t *shifted, const pixel_t q, const path_t *source_path) {
+  if(is_null(source_path)) {
+    set_null(shifted);
+    return 0.0;
   }
 
+  return path_shift(shifted, q._i, q._j, source_path, 1);
 }
 
 // Combine reservoir s with r.
@@ -178,44 +185,41 @@ static void combine(const pixel_t qs, reservoir_t *s, pixel_t const qr, const re
   // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
 
-  // shift r's path to s's domain
-  path_t r_path_from_qs;
-  double Jr = 0.0;
-  
-  if(is_null(r->path))
-    set_null(&r_path_from_qs);
-  else {
-    Jr = path_shift(&r_path_from_qs, qs._i, qs._j, r->path, 1);
-    //Jr = multichain_perturb_connect_v2(r->path, &r_path_from_qs, qs._i, qs._j, 1);
-    if(Jr == 0.0)
-      set_null(&r_path_from_qs);
+  if(is_null(r->path)) {
+    s->c += r->c;
+    return;
   }
   
-  // path_t s_path_from_qr;
-  // double Js = 0.0;
-  // if(is_null(s->path))
-  //   set_null(&s_path_from_qr);
-  // else {
-  //   Js = path_shift(&s_path_from_qr, qr._i, qr._j, s->path, 1);
-  //   if(Js == 0.0)
-  //     set_null(&s_path_from_qr);
+  path_t r_path_from_qs;
+  md_t mis_r;
+  md_t mis_s;
+  md_t w_r;
+  md_t w_s;
+
+  // shift r's path to s's domain
+  float J = path_shift_wrapper(&r_path_from_qs, qs, r->path);
+
+  // option 1
+  if(is_null(s->path)) {
+    s->c += r->c;
+    return;
+  }
+
+  // option 2
+  // if(is_null(s->path)) {
+  //   path_copy(s->path, &r_path_from_qs);
+  //   s->w_sum = p_hat(&r_path_from_qs) * r->W * J;
+  //   s->c += r->c;
+  //   s->W = s->w_sum / p_hat(s->path);
+  //   return;
   // }
 
-  // calculate weights
-  // r's MIS weight in s domain
-  // md_t mis_r = r->c * p_hat(&r_path_from_qs) / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
-  // r's MIS weight in r domain
-  // md_t mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path)         + s->c * p_hat(&s_path_from_qr));
+  mis_r = (r->c) / (s->c + r->c);
+  mis_s = (s->c) / (s->c + r->c);
   
-  // s's MIS weight in s domain
-  // md_t mis_s = s->c * p_hat(s->path) / (r->c * p_hat(&r_path_from_qs) + s->c * p_hat(s->path));
+  w_r = mis_r * p_hat(&r_path_from_qs) * r->W * J;
+  w_s = mis_s * p_hat(s->path) * s->W;
 
-  md_t mis_r = (r->c) / (s->c + r->c);
-  md_t mis_s = (s->c) / (s->c + r->c);
-
-  md_t w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
-  md_t w_s = mis_s * p_hat(s->path) * s->W;
-  
   // combine reservoirs in s
   s->w_sum = w_s;
   update(s, &r_path_from_qs, w_r, r->c);
@@ -236,7 +240,7 @@ static void random_neighbor(const pixel_t q, const path_t *path, reservoir_t **n
 
   int l, m; // int instead of uint64_t so they can be negative (important for clamping)
 
-  const int d = 10; // sample in 10x10 square around (i, j)
+  const int d = 30; // sample in 2*d x 2*d square with (i, j) in the center
   const int MAX_ATTEMPTS = 10; // when i == l && j == m or neighbor not geometrically similar enough
   for(int k = 0; k < MAX_ATTEMPTS; k++) {
     // TODO: make edge clamping uniform probablility
@@ -355,7 +359,7 @@ void sampler_create_path(path_t *path)
 
   #if(1)
   // spatial re-use
-  const int neighbors = 3;
+  const int neighbors = 10;
   {
   reservoir_t neighbor;
   reservoir_t *n;

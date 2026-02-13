@@ -50,10 +50,8 @@ void sampler_create_path(path_t *path)
   
   // extend path once to determine pixel on camera and first vertex
   //path_init(path, path->index, path->sensor.camid);
+  if(path_extend(path)) return;
   //path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
-
-  if(path_extend(path)) return;
-  if(path_extend(path)) return;
 
   // direct illumination
   if(nee_sample(path)) return;
@@ -62,14 +60,6 @@ void sampler_create_path(path_t *path)
 
   pointsampler_splat(path, path_throughput(path));
   return;
-
-  md_t f = path_measurement_contribution_dx(path, 0, path->length-1);
-  md_t pdf = path_pdf(path);
-
-  if(pdf <= 0.)
-    return;
-
-  pointsampler_splat(path, md_2f(f / pdf));
 }
 
 mf_t sampler_throughput(path_t *path)
@@ -104,5 +94,5 @@ md_t sampler_sum_pdf_dwp(path_t *p)
 
 void sampler_print_info(FILE *fd)
 {
-  fprintf(fd, "sampler  : ris\n");
+  fprintf(fd, "sampler  : di\n");
 }
