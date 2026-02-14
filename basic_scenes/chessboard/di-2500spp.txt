@@ -1,0 +1,27 @@
+corona-13: 
+file     : ./basic_scenes/chessboard/scene
+aabb     : (-9.427, 3.352)x(-54.097, 54.107)x(-43.930, 50.132) dm^3
+points   : simple and fast mersenne twister
+primitive: 101968 indexed primitives with motion blur support
+accel    : qbvh with tight motion-blurred boxes and support for big scenes, parallel build.
+shader   : loadable shader support
+render   : global illumination
+view     : samples per pixel: 2548 (0.20 s/prog) max path vertices 32
+           res 1024x576
+           elapsed wallclock prog 517.54s (08:37.54), total 602.87s (10:02.86), user 8704.96s (2h 25:04.95)
+           active cam 0
+camera   : thin lens model
+  focus  : 18.986294
+  film   : 35mm x 20mm
+         : 1/125 f/4.0 60mm iso 400
+           cam 0 average image intensity (rgb): (0.343336 0.270338 0.189817)
+           ...|....1....|....2....|....3..
+            █                             
+            █                             
+            █                             
+render   : global illumination
+filter   : blackman harris, using spinlocks
+sampler  : di
+mutations: none
+camera   : linear rec709 D65
+input    : linear rec709 adapted to illuminant E

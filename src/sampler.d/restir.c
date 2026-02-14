@@ -74,7 +74,7 @@ static void get_pixel(const uint64_t index, pixel_t *q, const int set) {
   q->_j = (float)(q->j) + 0.5f;
 }
 
-static void path_from_pixel(const pixel_t q, path_t *path) {
+static void path_from_pixel(pixel_t q, path_t *path) {
   path_init(path, 0, 0); // TODO potentially update camid if using other cameras (see sampler_create_path)
   path_set_pixel(path, q._i, q._j);
   path_extend(path);
@@ -105,18 +105,9 @@ static md_t p_hat(path_t *path) {
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
-static md_t p_hat_from(const pixel_t q, path_t *path) {
-  if(is_null(path))
-    return 0.0;
-
-  path_t path_inverted;
-  float J = path_shift(&path_inverted, q._i, q._j, path, 1);
-  return p_hat(&path_inverted) * J;
-}
-
 // Perform Resampled Importance Sampling (streaming RIS)
 // r will be reset and filled with initial samples for pixel q
-static void ris(const pixel_t q, reservoir_t *r) {
+static void ris(pixel_t q, reservoir_t *r) {
   
   // reset
   set_null(r->path);
@@ -167,57 +158,55 @@ static void ris(const pixel_t q, reservoir_t *r) {
   } 
 }
 
-float path_shift_wrapper(path_t *shifted, const pixel_t q, const path_t *source_path) {
+float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
   if(is_null(source_path)) {
     set_null(shifted);
     return 0.0;
   }
 
-  return path_shift(shifted, q._i, q._j, source_path, 1);
+  float J = path_shift(shifted, q._i, q._j, source_path, 1);
+  
+  // check if shift failed
+  if (J == 0.0f || p_hat(shifted) == 0.0f) {
+    set_null(shifted);
+    return 0.0;
+  }
+
+  return J;
 }
 
 // Combine reservoir s with r.
 // The sample in r (r->path) will be shifted to the domain (pixel) of the sample in s (s->path).
-static void combine(const pixel_t qs, reservoir_t *s, pixel_t const qr, const reservoir_t *r) {
+static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r) {
   // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
   if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
 
   // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
-
-  if(is_null(r->path)) {
-    s->c += r->c;
-    return;
-  }
   
   path_t r_path_from_qs;
+  path_t s_path_from_qr;
   md_t mis_r;
   md_t mis_s;
   md_t w_r;
   md_t w_s;
 
-  // shift r's path to s's domain
-  float J = path_shift_wrapper(&r_path_from_qs, qs, r->path);
+  float Jr = shift(&r_path_from_qs, qs, r->path);
+  float Js = shift(&s_path_from_qr, qr, s->path);
 
-  // option 1
-  if(is_null(s->path)) {
-    s->c += r->c;
-    return;
-  }
-
-  // option 2
-  // if(is_null(s->path)) {
-  //   path_copy(s->path, &r_path_from_qs);
-  //   s->w_sum = p_hat(&r_path_from_qs) * r->W * J;
-  //   s->c += r->c;
-  //   s->W = s->w_sum / p_hat(s->path);
-  //   return;
-  // }
-
-  mis_r = (r->c) / (s->c + r->c);
-  mis_s = (s->c) / (s->c + r->c);
+  // MIS weights
+  if(is_null(s->path))
+    mis_s = 0.0f;
+  else
+    mis_s = s->c * p_hat(s->path) / (s->c * p_hat(s->path) + r->c * p_hat(&s_path_from_qr) * Js);
   
-  w_r = mis_r * p_hat(&r_path_from_qs) * r->W * J;
+  if(is_null(r->path))
+    mis_r = 0.0f;
+  else
+    mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path) + s->c * p_hat(&r_path_from_qs) * Jr);
+  
+  // resampling weights
+  w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
   w_s = mis_s * p_hat(s->path) * s->W;
 
   // combine reservoirs in s
@@ -225,8 +214,9 @@ static void combine(const pixel_t qs, reservoir_t *s, pixel_t const qr, const re
   update(s, &r_path_from_qs, w_r, r->c);
 
   // update estimator
-  if(not_null(s->path))
-    s->W = s->w_sum / p_hat(s->path); // NaN if s->path is null (not really a problem)
+  if(not_null(s->path)) {
+    s->W = s->w_sum / p_hat(s->path);
+  }
   else
     s->W = 0.;
   
@@ -234,7 +224,7 @@ static void combine(const pixel_t qs, reservoir_t *s, pixel_t const qr, const re
   if(s->c > 100.) s->c = 100.;
 }
 
-static void random_neighbor(const pixel_t q, const path_t *path, reservoir_t **n, pixel_t *q_n) {
+static void random_neighbor(pixel_t q, const path_t *path, reservoir_t **n, pixel_t *q_n) {
   uint64_t w = view_width();
   uint64_t h = view_height();
 
@@ -342,11 +332,6 @@ void sampler_create_path(path_t *path)
   r->path->index = path->index;
   //r->path->sensor.camid = path->sensor.camid; // TODO potentially if using other cameras (see path_from_pixel)
 
-  if(not_null(r->path)) {
-    assert(r->path->sensor.pixel_i == q._i);
-    assert(r->path->sensor.pixel_j == q._j);
-  }
-
   // generate initial candidates
   //ris(q, r); //done in sampler_prepare_frame()
 
@@ -375,6 +360,9 @@ void sampler_create_path(path_t *path)
     path_copy(neighbor.path, n->path); // copy to avoid race conditions/dirty reads (still not fully bullet proof as the path can have changed between w_sum copy and now)
     
     combine(q, r, q_n, &neighbor);
+    if(not_null(r->path)) {
+      assert(p_hat(r->path) > 0.0f);
+    }
   }
 
   free(neighbor.path);
