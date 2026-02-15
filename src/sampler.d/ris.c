@@ -30,7 +30,7 @@
 typedef struct reservoir_t {
   path_t *path; // output sample
   md_t w_sum;   // sum of weights
-  double c;     // confidence weight of output (= the amount of samples behind the output sample)
+  double c;     // confidence weight of output (= the amount of samples behind the output sample, but can be capped)
   md_t W;       // contribution weight: estimate for 1/p
 } reservoir_t;
 
@@ -39,8 +39,24 @@ typedef struct sampler_t {
 } sampler_t;
 
 // returns random double between 0 and 1
+// separate from pointsampler for things that should always be random (never stratified)
 static double random_uniform() {
   return ((double)rand()/(double)RAND_MAX);
+}
+
+// set pixel of paths ourself to control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
+static void get_pixel(uint64_t index, uint64_t *i, uint64_t *j) {
+  // standard loop through screen pixels:
+  //           w
+  //       0 1 2  3  4
+  //      ------------
+  //    0| 0 3 6 9  12
+  //  h 1| 1 4 7 10 13
+  //    2| 2 5 8 11 14 (15 wraps back to index 0)
+  uint64_t w = view_width();
+  uint64_t h = view_height();
+  *i = (index / h) % w;
+  *j = index % h;
 }
 
 // Updates reservoir with sample and weight.
@@ -68,41 +84,6 @@ static md_t p_hat(path_t *path) {
   if(is_null(path))
     return 0.0;
   return path_measurement_contribution_dx(path, 0, path->length-1);
-}
-
-static void combine(reservoir_t *s, const reservoir_t *r) {
-  // can't combine reservoir with itself (happens when random_neighbor fails for example)
-  if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
-
-  // reservoirs can't be empty (although the path in the reservoir can still be the null sample (= uninitialized path))
-  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs"); return;}
-
-  //md_t phat_r = p_hat(r->path);
-  //md_t phat_s = p_hat(s->path);
-  //double rm = r->c * phat_r;
-  //double sm = s->c * phat_s;
-
-  // bias! how?
-  //double mis_r = (rm + sm) > 0. ? rm/(rm+sm) : 0.;
-  //double mis_s = (rm + sm) > 0. ? sm/(rm+sm) : 0.;
-  //printf("rm %f, sm %f, mis_r %f, mis_s %f\n", rm, sm, mis_r, mis_s);
-  double mis_r = r->c / (s->c + r->c);
-  double mis_s = s->c / (s->c + r->c);
-
-  md_t w_r = mis_r * p_hat(r->path) * r->W; 
-  md_t w_s = mis_s * p_hat(s->path) * s->W;
-
-  s->w_sum = w_s;
-  update(s, r->path, w_r, r->c);
-
-  // update estimator
-  if(not_null(s->path))
-    s->W = s->w_sum / p_hat(s->path); // NaN if s->path is null (not really a problem)
-  else
-    s->W = 0.;
-
-  // confidence capping
-  if(s->c > 20.) s->c = 20.;
 }
 
 sampler_t *sampler_init() {
@@ -154,7 +135,7 @@ void sampler_clear(sampler_t *s) {}
 // init_path is an initial path for DI that has only 2 vertices starting from camera, no light source yet.
 static void ris(reservoir_t *r, const path_t *init_path) {
   assert(init_path->length == 2); // only camera vertex and hitpoint
-  assert(!(init_path->v[0].mode & s_emit));
+  assert(!(init_path->v[2].flags & s_environment));
 
   // reset
   set_null(r->path);
@@ -168,17 +149,22 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   for(int k = 0; k < M; k++) {
     path_copy(&path, init_path);
     
-    // direct illumination, fails when hitpoint of init_path on envmap
-    if(nee_sample(&path)) continue;
-
-    // happens a lot, also in scene with just a lit backpanel
-    if(p_hat(&path) <= 0.) { /*printf("p_hat == 0\n");*/ }
+    // direct illumination
+    int s = path_extend(&path);
+    if(s) {
+      r->c += 1.; // fast update when sampling fails
+      continue;
+    }
+    if(nee_sample(&path)) {
+      r->c += 1.; // fast update when sampling fails, e.g. sample not visible or brdf=0
+      continue;
+    }
 
     md_t w = 0.0;
-    md_t phat = p_hat(&path);
-    md_t p = path.v[2].pdf;
+    md_t f = p_hat(&path);
+    md_t p = path_pdf(&path);
     if(p > 0.0)
-      w = (1.0/M) * (phat/p); // 1/M uniform weights
+      w = (1.0/M) * (f/p); // 1/M uniform weights
 
     update(r, &path, w, 1.); // new independent sample gets confidence = 1
   }
@@ -191,8 +177,15 @@ static void ris(reservoir_t *r, const path_t *init_path) {
 
 void sampler_create_path(path_t *path)
 {  
-  // init and extend path once to determine pixel on camera and first vertex (stuff handled by pointsampler)
+  // get pixel & reservoir from path index
+  uint64_t i, j;
+  reservoir_t *r;
+  get_pixel(path->index, &i, &j);
+  r = &rt.sampler->reservoirs[i][j];
+  
+  // extend path once to determine pixel on camera and first vertex
   path_init(path, path->index, path->sensor.camid);
+  path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
   if(path_extend(path)) return;
 
   // check for env map hit
@@ -201,33 +194,18 @@ void sampler_create_path(path_t *path)
     return;
   }
 
-  reservoir_t *r;
-  uint64_t i = (uint64_t)path->sensor.pixel_i;
-  uint64_t j = (uint64_t)path->sensor.pixel_j;
-  
-  r = &rt.sampler->reservoirs[i][j];
-
   // inital candidate generation
-  reservoir_t rris;
-  rris.path = (path_t*)malloc(sizeof(path_t));
-  ris(&rris, path);
-
-  // combine with existing reservoir
-  combine(r, &rris);
+  ris(r, path);
 
   // don't splat null sample
   if(is_null(r->path)) {
-    free(rris.path);
     return; 
   }
 
   // estimator f(r.Y) * r.W
-    // multiply by 1/v[0].pdf * 1/v[1].pdf, because r.W is an estimator of only 1/v[2].pdf!
-  pointsampler_splat(r->path, md_2f(f(r->path) * r->W / (path->v[0].pdf * path->v[1].pdf)));
+  pointsampler_splat(r->path, md_2f(f(r->path) * r->W));
   
   path_copy(path, r->path);
-
-  free(rris.path);
 }
 
 mf_t sampler_throughput(path_t *path)

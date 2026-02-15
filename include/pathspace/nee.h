@@ -86,7 +86,7 @@ static inline mf_t nee_pdf_adjoint(const path_t *path, int v)
 // sample next event. returns != 0 on failure
 static inline int nee_sample(path_t *p)
 {
-  assert(p->length >= 2); // at least camera and first hit.
+  assert(p->length >= 2);
   if(p->v[p->length-1].flags & s_environment) return 1;
   if(p->length >= PATHSPACE_MAX_VERTS) return 1;
   const int v = p->length; // constructing new vertex here
@@ -185,21 +185,25 @@ static inline int nee_sample(path_t *p)
 #endif
   }
 
-  if(!mf_any(mf_gt(edf, mf_set1(0.0f)))) goto fail;
+  if(!mf_any(mf_gt(edf, mf_set1(0.0f)))) { goto fail; }
   // need to check visibility to new vertex, compute brdf and throughput:
   const mf_t bsdf = shader_brdf(p, v-1); // also set mode on vertex v-1
-  if(!mf_any(mf_gt(bsdf, mf_set1(0.0f)))) goto fail; // check for specular materials.
+
+  // comment out for restir
+  if(!mf_any(mf_gt(bsdf, mf_set1(0.0f)))) { goto fail; } // check for specular materials.
 
   // determine side of surface and volume from that (brdf sets mode)
-  if(path_edge_init_volume(p, v)) goto fail;
+  if(path_edge_init_volume(p, v)) { goto fail; }
 
-  if(!path_visible(p, v)) goto fail;
+  // comment out for restir
+  if(!path_visible(p, v)) { goto fail; }
 
   shader_prepare(p, v);
   // sampled point so far at the rims of the volume that we fell
   // off it trying to determine the emission
-  if((p->v[v].mode & s_volume) && mf_all(mf_eq(p->v[v].interior.mu_t, mf_set1(0.0f))))
+  if((p->v[v].mode & s_volume) && mf_all(mf_eq(p->v[v].interior.mu_t, mf_set1(0.0f)))) {
     goto fail;
+  }
 
   const float G = path_G(p, v);
 
@@ -221,7 +225,7 @@ fail:
     p->v[v].mode = s_absorb;
     p->v[v].rand_cnt = s_dim_num_nee;
     p->length++; // constructed vertex v (even if it absorbs)
-    return 0;
+    return 5; // return as failure for restir (even though the vertex is constructed)
   }
   p->v[v].rand_cnt = s_dim_num_nee;
   p->length++; // constructed vertex v

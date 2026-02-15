@@ -7,6 +7,7 @@
 #include "view.h"
 #include "pathspace/manifold.h"
 #include "pathspace/tech.h"
+#include "pathspace/halfvec.h"
 #include "lights.h"
 #include <string.h>
 
@@ -185,12 +186,12 @@ int path_extend(path_t *path)
   // regular inner path vertex?
   if(path->length)
   {
-    if(path->v[v-1].flags & s_environment) return 1;
+    if(path->v[v-1].flags & s_environment) return 2;
     if(!mf_any(mf_gt(path->v[v-1].throughput, mf_set1(0.0f))))
     {
       path->v[v-1].throughput = mf_set1(0.0f);
       path->v[v-1].mode = s_absorb;
-      return 1;
+      return 3;
     }
 
     // 1) sample bsdf
@@ -257,7 +258,7 @@ int path_extend(path_t *path)
     if(!(path->v[v-1].mode & s_emit)) // only set to absorption in case we didn't try to reflect off a light source.
       path->v[v-1].mode = s_absorb;   // the emit flag we'd like to keep.
     path->v[v].throughput = mf_set1(-0.0f);
-    return 1; // return without incrementing path length.
+    return 4; // return without incrementing path length.
   }
 
   // transform probability to on-surface probability at vertex v
@@ -492,58 +493,62 @@ void path_reverse(path_t *path, const path_t *input)
   // assert(fabs(f1 - f2) < 1e-1f*fmax(f1, f2));
 }
 
-// shift the last vertex of path2 onto path1
-int path_shift(path_t *path1, path_t *path2) {
-  assert(path1->length >= 2 && path2->length > 0);
-  if(path1->length + 1 > PATHSPACE_MAX_VERTS) return 4; 
+// create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end) {
+  assert(source_path->length > end);
 
-  //printf("--- Shifting ---\n");
+  *shifted = *source_path;
+  shifted->sensor.pixel_i = pixel_i;
+  shifted->sensor.pixel_j = pixel_j;
+  shifted->sensor.pixel_set = 1;
 
-  int v = path1->length;
-  //printf("path1 length: %d, path2 length: %d, v: %d\n", path1->length, path2->length, v);
+  // support for defocusing?
+  //shifted->sensor.aperture_x = source_path->sensor.aperture_x;
+  //shifted->sensor.aperture_y = source_path->sensor.aperture_y;
+  //shifted->sensor.aperture_set = 1;
+
+  // shifting lambda would need to re-eval the rest of the source path too
+  shifted->lambda = source_path->lambda; // needed line? isn't it already copied?
+  shifted->time = source_path->time;
   
-  // recalculate edge
-  for(int i=0;i<3;i++)
-  path1->e[v].omega[i] = path2->v[v].hit.x[i] - path1->v[v-1].hit.x[i];
-  path1->e[v].dist = sqrtf(dotproduct(path1->e[v].omega, path1->e[v].omega));
-  for(int i=0;i<3;i++)
-  path1->e[v].omega[i] /= path1->e[v].dist;
-  path1->e[v].transmittance = mf_set1(0.0f);
+  shader_exterior_medium(shifted);
+  if(view_cam_sample(shifted) <= 0.0f) 
+    return 0.0; // camera ray failed
 
-  //printf("dist e[2] = %f\n", path1->e[v].dist);
+  for(int v = 1; v <= end; v++) {
+    shifted->v[v].mode = source_path->v[v].mode;
+    shifted->e[v].transmittance = 0.0f;
+    if(path_propagate(shifted, v, s_propagate_mutate)) 
+      return 0.0; // propagation failed
+  }
+
+  // project
+  shifted->v[end+1].mode = source_path->v[end+1].mode;
+  shifted->e[end+1].transmittance = 0.0f;
   
-  // append vertex
-  memcpy(path1->v+v, path2->v+(path2->length-1), sizeof(vertex_t));
-  path1->length++;
+  if(path_project(shifted, end+1, s_propagate_mutate) ||
+      (shifted->v[end+1].flags           != source_path->v[end+1].flags) ||
+      (shifted->v[end+1].hit.shader      != source_path->v[end+1].hit.shader) ||
+      (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader) ||
+      (primid_invalid(shifted->v[end+1].hit.prim) != primid_invalid(source_path->v[end+1].hit.prim))) {
+    return 0.0;
+  }
 
-  // set pdf here?
-  path1->v[v].pdf = path_pdf_extend(path1, v);
+  // check whether we actually arrived at vertex v[end+1]
+  for(int k=0;k<3;k++)
+    if(fabsf(shifted->v[end+1].hit.x[k] - source_path->v[end+1].hit.x[k]) > HALFVEC_REL_SPATIAL_EPS *
+        MAX(MAX(fabsf(shifted->v[end+1].hit.x[k]), fabsf(source_path->v[end+1].hit.x[k])), 1.0))
+      return 0.0;
   
-  assert(path1->v[v].mode & s_emit); // make sure it's a light source
-  
-  const mf_t bsdf = shader_brdf(path1, v-1);
-  if(path_edge_init_volume(path1, v)) return 1;
-  mf_t vol = shader_vol_transmittance(path1, v);
+  // // check visibility
+  // if(!path_visible(shifted, end+1)) {
+  //   return 0.0;
+  // }
 
-  //printf("bsdf: %f\n", bsdf);  
-  
-  if(bsdf <= 0.0f || (path1->v[v-1].mode & s_specular))
-    return 2; // kills specular connections
-
-  // Will give bias if not visible
-  if(!path_visible(path1, v)) return 3;
-
-  // fix cached eta rations
-  // necessary? don't know what this is tbh...
-  for(int k=v;k<path1->length;k++)
-    path1->v[v].diffgeo.eta = path_eta_ratio(path1, v);
-
-  // evaluate throughput
-  const mf_t connect = vol * path_G(path1, v) * bsdf;
-  const mf_t throughput = path1->v[v-1].throughput * connect * path2->v[path2->length-1].throughput;
-  //printf("vol: %f, G: %f, connect: %f, v[v-1].throughput: %f, v[v].throughput: %f\n", vol, path_G(path1,v), connect, path1->v[v-1].throughput, path1->v[v].throughput);  
-  path1->throughput = throughput;
-  return 0;
+  float shif = path_lambert(shifted, end, shifted->e[end].omega) / (shifted->e[end].dist * shifted->e[end].dist);
+  float sour = path_lambert(source_path, end, source_path->e[end].omega) / (source_path->e[end].dist * source_path->e[end].dist);
+  if(shif == 0.0f) return 0.0f;
+  return sour / shif;
 }
 
 // connect two paths, extending path1 by a connection edge and the reverse of path2.
