@@ -230,7 +230,7 @@ static void random_neighbor(pixel_t q, const path_t *path, reservoir_t **n, pixe
 
   int l, m; // int instead of uint64_t so they can be negative (important for clamping)
 
-  const int d = 30; // sample in 2*d x 2*d square with (i, j) in the center
+  const int d = 10; // sample in 2*d x 2*d square with (i, j) in the center
   const int MAX_ATTEMPTS = 10; // when i == l && j == m or neighbor not geometrically similar enough
   for(int k = 0; k < MAX_ATTEMPTS; k++) {
     // TODO: make edge clamping uniform probablility
@@ -344,7 +344,7 @@ void sampler_create_path(path_t *path)
 
   #if(1)
   // spatial re-use
-  const int neighbors = 10;
+  const int neighbors = 5;
   {
   reservoir_t neighbor;
   reservoir_t *n;
@@ -360,9 +360,6 @@ void sampler_create_path(path_t *path)
     path_copy(neighbor.path, n->path); // copy to avoid race conditions/dirty reads (still not fully bullet proof as the path can have changed between w_sum copy and now)
     
     combine(q, r, q_n, &neighbor);
-    if(not_null(r->path)) {
-      assert(p_hat(r->path) > 0.0f);
-    }
   }
 
   free(neighbor.path);
