@@ -55,7 +55,6 @@ static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
   return 0;
 }
 
-// path must be initialized!
 static md_t f(path_t *path) {
   if(is_null(path))
     return 0.0;
@@ -63,37 +62,46 @@ static md_t f(path_t *path) {
 }
 
 // Use the integrand f as target function p_hat
-// path must be initialized!
 static md_t p_hat(path_t *path) {
   if(is_null(path))
     return 0.0;
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
-static void combine(reservoir_t *s, const reservoir_t *r) {
+// Combine reservoirs s and r
+// Path is a length 2 path that contains the camera vertex and hitpoint for which the throughput in the reservoirs will be calculated.
+// Reservoir s is assumed to already be based on path.
+static void combine(path_t *path, reservoir_t *s, const reservoir_t *r, uint64_t i, uint64_t j) {
   // can't combine reservoir with itself (happens when random_neighbor fails for example)
   if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
 
-  // reservoirs can't be empty (although the path in the reservoir can still be the null sample (= uninitialized path))
+  // reservoirs can't be empty (although the path in the reservoirs can still be the null sample)
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs"); return;}
 
-  //md_t phat_r = p_hat(r->path);
-  //md_t phat_s = p_hat(s->path);
-  //double rm = r->c * phat_r;
-  //double sm = s->c * phat_s;
+  // shift r->path
+  path_t shifted;
+  path_copy(&shifted, path);
 
-  // bias! how?
-  //double mis_r = (rm + sm) > 0. ? rm/(rm+sm) : 0.;
-  //double mis_s = (rm + sm) > 0. ? sm/(rm+sm) : 0.;
-  //printf("rm %f, sm %f, mis_r %f, mis_s %f\n", rm, sm, mis_r, mis_s);
-  double mis_r = r->c / (s->c + r->c);
+  if(not_null(r->path)) {
+    // if(i == 800 && j == 200) {
+    //   int status = path_shift(&shifted, r->path); // s.v[0] -> s.v[1] -> r.v[2]
+    //   printf("shift status: %d | p_hat(&shifted): %f\n", status, p_hat(&shifted));
+    // }
+    // path_copy(&shifted, r->path); 
+    path_shift(&shifted, r->path);
+  }
+  else
+    set_null(&shifted);
+  
+  // calculate weights
   double mis_s = s->c / (s->c + r->c);
-
-  md_t w_r = mis_r * p_hat(r->path) * r->W; 
+  double mis_r = r->c / (s->c + r->c);
+  md_t w_r = mis_r * p_hat(&shifted) * r->W;
   md_t w_s = mis_s * p_hat(s->path) * s->W;
-
+  
+  // combine reservoirs in s
   s->w_sum = w_s;
-  update(s, r->path, w_r, r->c);
+  update(s, &shifted, w_r, r->c);
 
   // update estimator
   if(not_null(s->path))
@@ -105,6 +113,35 @@ static void combine(reservoir_t *s, const reservoir_t *r) {
   if(s->c > 20.) s->c = 20.;
 }
 
+static reservoir_t *random_neighbor(uint64_t i, uint64_t j, path_t *path) {
+  uint64_t w = view_width();
+  uint64_t h = view_height();
+
+  int l, m; // int instead of uint64_t so they can be negative (important for clamping)
+  reservoir_t *r;
+
+  const int d = 5; // sample in 20x20 square around (i, j)
+  const int MAX_ATTEMPTS = 10; // when i == l && j == m or neighbor not geometrically similar enough
+  for(int k = 0; k < MAX_ATTEMPTS; k++) {
+    // TODO: make edge clamping uniform probablility
+    l = i + (2*d*random_uniform() - d);
+    m = j + (2*d*random_uniform() - d);
+
+    l = CLAMP(l, 0, w-1);
+    m = CLAMP(m, 0, h-1);
+
+    if((uint64_t)l == i && (uint64_t)m == j) continue;
+
+    r = &rt.sampler->reservoirs[(uint64_t)l][(uint64_t)m];
+    
+    // geometric similarity
+    // TODO: r->path->v[1] must be similar to path->v[1]
+    return r;
+  }
+
+  return &rt.sampler->reservoirs[i][j]; // return same reservoir
+}
+    
 sampler_t *sampler_init() {
   uint64_t i, j;
   uint64_t w = view_width(); // 1024 (standard)
@@ -161,7 +198,6 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
-  path_t path;
 
   const int M = 8;
   path_t path;
@@ -171,19 +207,16 @@ static void ris(reservoir_t *r, const path_t *init_path) {
     // direct illumination, fails when hitpoint of init_path on envmap
     if(nee_sample(&path)) continue;
 
-    // happens a lot, also in scene with just a lit backpanel
-    if(p_hat(&path) <= 0.) { /*printf("p_hat == 0\n");*/ }
-
     md_t w = 0.0;
-    md_t phat = p_hat(&path);
+    md_t f = p_hat(&path);
     md_t p = path.v[2].pdf;
     if(p > 0.0)
-      w = (1.0/M) * (phat/p); // 1/M uniform weights
+      w = (1.0/M) * (f/p); // 1/M uniform weights
 
     update(r, &path, w, 1.); // new independent sample gets confidence = 1
   }
 
-  // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
+  // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples had 0 contribution (i.e. p_hat(sample) == 0)
   if(not_null(r->path)) {
     r->W = r->w_sum / p_hat(r->path);
   }
@@ -204,7 +237,6 @@ void sampler_create_path(path_t *path)
   reservoir_t *r;
   uint64_t i = (uint64_t)path->sensor.pixel_i;
   uint64_t j = (uint64_t)path->sensor.pixel_j;
-  
   r = &rt.sampler->reservoirs[i][j];
 
   // inital candidate generation
@@ -213,7 +245,14 @@ void sampler_create_path(path_t *path)
   ris(&rris, path);
 
   // combine with existing reservoir
-  combine(r, &rris);
+  combine(path, r, &rris, i, j);
+
+  // spatial re-use
+  const int neighbors = 3;
+  for(int k = 0; k < neighbors; k++) {
+    // TODO: pick neighbors without replacement
+    combine(path, r, random_neighbor(i, j, r->path), i, j);
+  }
 
   // don't splat null sample
   if(is_null(r->path)) {
