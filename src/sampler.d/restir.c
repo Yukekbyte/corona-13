@@ -131,16 +131,16 @@ static void ris(pixel_t q, reservoir_t *r) {
 
     // direct illumination
     if(nee_sample(&path)) {
-      r->c += 1.; // fast update when sampling fails
-      if(path.length > 2) path_pop(&path);
+      r->c += 1.;
       continue;
     }
 
-    // if(!path_visible(&path, 2)) {
-    //   r->c += 1.;
-    //   path_pop(&path);
-    //   continue;
-    // }
+    // fast update when p_hat (f) is zero
+    if(path.v[path.length-1].throughput <= 0.0) {
+      r->c += 1.;
+      if(path.length > 2) path_pop(&path);
+      continue;
+    }
 
     md_t w = 0.0;
     md_t f = p_hat(&path);

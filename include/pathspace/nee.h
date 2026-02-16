@@ -225,7 +225,7 @@ fail:
     p->v[v].mode = s_absorb;
     p->v[v].rand_cnt = s_dim_num_nee;
     p->length++; // constructed vertex v (even if it absorbs)
-    return 5; // return as failure for restir (even though the vertex is constructed)
+    return 0;
   }
   p->v[v].rand_cnt = s_dim_num_nee;
   p->length++; // constructed vertex v

@@ -142,29 +142,53 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
-  path_t path;
 
   const int M = 8;
   path_t path;
   for(int k = 0; k < M; k++) {
     path_copy(&path, init_path);
-    
-    // direct illumination
-    int s = path_extend(&path);
-    if(s) {
-      r->c += 1.; // fast update when sampling fails
-      continue;
-    }
-    if(nee_sample(&path)) {
-      r->c += 1.; // fast update when sampling fails, e.g. sample not visible or brdf=0
-      continue;
+    md_t pdf = 1;
+
+    // randomly choose between one, two or three bounces
+    double double_bounce_pdf = 0.33;
+    double triple_bounce_pdf = 0.67;
+    double u = random_uniform();
+    if(double_bounce_pdf < u) {
+      if(path_extend(&path)) {
+        r->c += 1.;
+        continue;
+      }
+      if(triple_bounce_pdf < u) {
+        if(path_extend(&path)) {
+          r->c += 1.;
+          continue;
+        }
+        pdf *= 1 - triple_bounce_pdf;
+      } else {
+        pdf *= triple_bounce_pdf - double_bounce_pdf;
+      }
+    } else {
+      pdf *= 1 - double_bounce_pdf;
     }
 
+    // sample light source
+    if(nee_sample(&path)) {
+      r->c += 1.;
+      continue;
+    }
+    
+    // fast update when p_hat (f) is zero
+    if(path.v[path.length-1].throughput <= 0.0) {
+      r->c += 1.;
+      if(path.length > 2) path_pop(&path);
+      continue;
+    }
+      
     md_t w = 0.0;
-    md_t f = p_hat(&path);
-    md_t p = path_pdf(&path);
-    if(p > 0.0)
-      w = (1.0/M) * (f/p); // 1/M uniform weights
+    //md_t f = p_hat(&path); //p_hat(&path);
+    //pdf *= path_pdf(&path);
+    if(pdf > 0.0)
+      w = (1.0/M) * (path.throughput/pdf); // 1/M uniform weights
 
     update(r, &path, w, 1.); // new independent sample gets confidence = 1
   }
