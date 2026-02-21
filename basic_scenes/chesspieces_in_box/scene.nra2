@@ -44,7 +44,7 @@ mult 1 22 21 # 23 knight
 5 geo/central_light
 2 geo/cube
 2 geo/long_cube
-14 geo/pawn
-2 geo/knight
-2 geo/rook
-14 geo/bishop
+12 geo/pawn
+23 geo/knight
+8 geo/rook
+20 geo/bishop

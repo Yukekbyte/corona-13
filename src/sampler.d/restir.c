@@ -105,6 +105,10 @@ static md_t p_hat(path_t *path) {
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
+static int get_length(int min_length, int max_length) {
+  return rand() % (max_length - min_length + 1) + min_length;
+}
+
 // Perform Resampled Importance Sampling (streaming RIS)
 // r will be reset and filled with initial samples for pixel q
 static void ris(pixel_t q, reservoir_t *r) {
@@ -125,31 +129,41 @@ static void ris(pixel_t q, reservoir_t *r) {
     path_copy(r->path, &path);
     return;
   }
-  
+
+  int min_length = 3;
+  int max_length = 10;
+
   const int M = 8;
   for(int k = 0; k < M; k++) {
+    int length = get_length(min_length, max_length);
 
+    // extend path
+    while(path.length < length - 1) {
+      if(path_extend(&path)) goto reset_path;
+    }
+      
     // direct illumination
     if(nee_sample(&path)) {
       r->c += 1.;
-      continue;
+      goto reset_path;
     }
-
+    
     // fast update when p_hat (f) is zero
     if(path.v[path.length-1].throughput <= 0.0) {
       r->c += 1.;
-      if(path.length > 2) path_pop(&path);
-      continue;
+      goto reset_path;
     }
 
     md_t w = 0.0;
     md_t f = p_hat(&path);
-    md_t p = path_pdf(&path);
+    md_t p = path_pdf(&path) * 1./(max_length - min_length + 1);
     if(p > 0.0)
       w = (1.0/M) * (f/p); // 1/M uniform weights
 
     update(r, &path, w, 1.); // new independent sample gets confidence = 1
-    path_pop(&path);
+
+reset_path:
+    while(path.length > 2) path_pop(&path);
   }
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples

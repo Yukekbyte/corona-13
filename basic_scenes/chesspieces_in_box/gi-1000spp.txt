@@ -1,0 +1,27 @@
+corona-13: 
+file     : ./basic_scenes/chesspieces_in_box/scene
+aabb     : (-7.446, 1.307)x(-4.571, 4.301)x(-1.754, 7.129) dm^3
+points   : simple and fast mersenne twister
+primitive: 11757 indexed primitives with motion blur support
+accel    : qbvh with tight motion-blurred boxes and support for big scenes, parallel build.
+shader   : loadable shader support
+render   : global illumination
+view     : samples per pixel: 1000 (0.67 s/prog) max path vertices 32
+           res 1024x576
+           elapsed wallclock prog 672.02s (11:12.01), total 703.60s (11:43.60), user 10664.57s (2h 57:44.56)
+           active cam 0
+camera   : thin lens model
+  focus  : 18.986294
+  film   : 35mm x 20mm
+         : 1/125 f/4.0 60mm iso 400
+           cam 0 average image intensity (rgb): (0.273969 0.193016 0.139466)
+           ...|....1....|....2....|....3..
+            █▁                            
+            ███▄▂                         
+            █████▇▆▅                      
+render   : global illumination
+filter   : blackman harris, using spinlocks
+sampler  : di
+mutations: none
+camera   : linear rec709 D65
+input    : linear rec709 adapted to illuminant E
