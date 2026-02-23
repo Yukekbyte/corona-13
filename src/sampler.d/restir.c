@@ -52,6 +52,10 @@ static double random_uniform() {
   return ((double)rand()/(double)RAND_MAX);
 }
 
+static int random_int(int min, int max) {
+  return rand() % (max - min + 1) + min;
+}
+
 // set pixel of paths ourself to: 
 // - avoid race conditions between threads by using the halton sequence
 // - control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
@@ -105,10 +109,6 @@ static md_t p_hat(path_t *path) {
   return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
-static int get_length(int min_length, int max_length) {
-  return rand() % (max_length - min_length + 1) + min_length;
-}
-
 // Perform Resampled Importance Sampling (streaming RIS)
 // r will be reset and filled with initial samples for pixel q
 static void ris(pixel_t q, reservoir_t *r) {
@@ -130,41 +130,26 @@ static void ris(pixel_t q, reservoir_t *r) {
     return;
   }
 
-  int min_length = 3;
-  int max_length = 10;
-
+  const int max_length = 10;
   const int M = 8;
-  for(int k = 0; k < M; k++) {
-    int length = get_length(min_length, max_length);
-
-    // extend path
-    while(path.length < length - 1) {
-      if(path_extend(&path)) goto reset_path;
-    }
+  for(int i = 0; i < M; i++) {
+    // generate path tree
+    while(path.length < max_length) {
+      // sample light source
+      if(nee_sample(&path)) break;
       
-    // direct illumination
-    if(nee_sample(&path)) {
-      r->c += 1.;
-      goto reset_path;
-    }
-    
-    // fast update when p_hat (f) is zero
-    if(path.v[path.length-1].throughput <= 0.0) {
-      r->c += 1.;
-      goto reset_path;
+      // path.throughput == p_hat/pdf and mis weight = 1
+      update(r, &path, path.throughput, 1.);
+      path_pop(&path);
+      
+      // extend path
+      if(path_extend(&path)) break;  
     }
 
-    md_t w = 0.0;
-    md_t f = p_hat(&path);
-    md_t p = path_pdf(&path) * 1./(max_length - min_length + 1);
-    if(p > 0.0)
-      w = (1.0/M) * (f/p); // 1/M uniform weights
-
-    update(r, &path, w, 1.); // new independent sample gets confidence = 1
-
-reset_path:
     while(path.length > 2) path_pop(&path);
   }
+
+  r->w_sum *= 1./M;
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
   if(not_null(r->path)) {
@@ -244,12 +229,13 @@ static void random_neighbor(pixel_t q, const path_t *path, reservoir_t **n, pixe
 
   int l, m; // int instead of uint64_t so they can be negative (important for clamping)
 
-  const int d = 10; // sample in 2*d x 2*d square with (i, j) in the center
+  // GRIS paper uses 7x7 for dense pixel blocks, radius 10 for real time (?)
+  const int d = 10; // sample with radius 5 (11 x 11) square neighborhood
   const int MAX_ATTEMPTS = 10; // when i == l && j == m or neighbor not geometrically similar enough
   for(int k = 0; k < MAX_ATTEMPTS; k++) {
     // TODO: make edge clamping uniform probablility
-    l = q.i + (2*d*random_uniform() - d);
-    m = q.j + (2*d*random_uniform() - d);
+    l = q.i + random_int(-d, d);
+    m = q.j + random_int(-d, d);
 
     l = CLAMP(l, 0, w-1);
     m = CLAMP(m, 0, h-1);
@@ -326,8 +312,6 @@ void sampler_prepare_frame(sampler_t *s) {
     for(j = 0; j < h; j++) {
       q.i = i;
       q.j = j;
-      //q._i = (float)(i) + 0.5f;
-      //q._j = (float)(j) + 0.5f;
       get_pixel(0, &q, 0); // only set _i, and _j
       ris(q, &s->reservoirs[i][j]);
     }
@@ -358,7 +342,7 @@ void sampler_create_path(path_t *path)
 
   #if(1)
   // spatial re-use
-  const int neighbors = 5;
+  const int neighbors = 3;
   {
   reservoir_t neighbor;
   reservoir_t *n;

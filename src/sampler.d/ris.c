@@ -143,54 +143,20 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   r->w_sum = 0.;
   r->W = 0.;
 
-  const int M = 8;
   path_t path;
-  for(int k = 0; k < M; k++) {
-    path_copy(&path, init_path);
-    md_t pdf = 1;
-
-    // randomly choose between one, two or three bounces
-    double double_bounce_pdf = 0.33;
-    double triple_bounce_pdf = 0.67;
-    double u = random_uniform();
-    if(double_bounce_pdf < u) {
-      if(path_extend(&path)) {
-        r->c += 1.;
-        continue;
-      }
-      if(triple_bounce_pdf < u) {
-        if(path_extend(&path)) {
-          r->c += 1.;
-          continue;
-        }
-        pdf *= 1 - triple_bounce_pdf;
-      } else {
-        pdf *= triple_bounce_pdf - double_bounce_pdf;
-      }
-    } else {
-      pdf *= 1 - double_bounce_pdf;
-    }
-
+  path_copy(&path, init_path);
+  
+  const int max_length = 10;
+  while(path.length < max_length) {
     // sample light source
-    if(nee_sample(&path)) {
-      r->c += 1.;
-      continue;
-    }
+    if(nee_sample(&path)) break;
     
-    // fast update when p_hat (f) is zero
-    if(path.v[path.length-1].throughput <= 0.0) {
-      r->c += 1.;
-      if(path.length > 2) path_pop(&path);
-      continue;
-    }
-      
-    md_t w = 0.0;
-    //md_t f = p_hat(&path); //p_hat(&path);
-    //pdf *= path_pdf(&path);
-    if(pdf > 0.0)
-      w = (1.0/M) * (path.throughput/pdf); // 1/M uniform weights
-
-    update(r, &path, w, 1.); // new independent sample gets confidence = 1
+    // path.throughput == p_hat/pdf and mis weight = 1
+    update(r, &path, path.throughput, 1.);
+    path_pop(&path);
+    
+    // extend path
+    if(path_extend(&path)) break;  
   }
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
