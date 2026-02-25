@@ -47,6 +47,9 @@ int pointsampler_accept(struct path_t *curr, struct path_t *tent);
 void pointsampler_mutate(struct path_t *curr, struct path_t *tent);
 void pointsampler_mutate_with_pixel(struct path_t *curr, struct path_t *tent, float i, float j);
 
+// preperation phase for sample with given index (mostly for ReSTIR passes)
+void pointsampler_prepare_sample(uint64_t index);
+
 void pointsampler_clear();
 void pointsampler_cleanup(pointsampler_t *s);
 void pointsampler_set_large_step(pointsampler_t *t, float p_large_step);

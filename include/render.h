@@ -18,6 +18,9 @@ void render_tls_cleanup(render_tls_t *r);
 // print descriptive string
 void render_print_info(FILE *fd);
 
+// preperation phase for sample with given index (mostly for ReSTIR passes)
+void render_prepare_sample(uint64_t index);
+
 // sample path with given index
 void render_sample_path(uint64_t index);
 

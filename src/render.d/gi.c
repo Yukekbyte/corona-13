@@ -78,6 +78,10 @@ void render_print_info(FILE *fd)
   fprintf(fd, "render   : global illumination\n");
 }
 
+void render_prepare_sample(uint64_t index) {
+  pointsampler_prepare_sample(index);
+}
+
 void render_sample_path(uint64_t index)
 {
   path_t *tent = rt_tls.render->tent_path;

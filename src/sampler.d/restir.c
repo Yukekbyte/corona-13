@@ -26,6 +26,13 @@
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
 
+#define M 8
+#define MAX_LENGTH_PATHS 10
+#define NEIGHBOUR_COUNT 5
+#define NEIGHBOUR_RADIUS 10
+#define SPATIAL_REUSE_PASSES 3
+#define CONFIDENCE_CAP 100
+
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
 typedef struct reservoir_t {
@@ -61,17 +68,23 @@ static int random_int(int min, int max) {
 // - control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
 static void get_pixel(const uint64_t index, pixel_t *q, const int set) {
   if(set) {
-    // // linear sequence
-    // uint64_t w = view_width();
-    // uint64_t h = view_height();
-    // q->i = (index / h) % w;
-    // q->j = index % h;
-
     // halton sequence
     pointsampler_pixel(index, &q->_i, &q->_j);
     q->i = (uint64_t)(q->_i);
     q->j = (uint64_t)(q->_j);
   }
+
+  // disable anti-aliasing
+  q->_i = (float)(q->i) + 0.5f;
+  q->_j = (float)(q->j) + 0.5f;
+}
+
+static void get_pixel_linear(const uint64_t index, pixel_t *q) {
+  // linear sequence
+  uint64_t w = view_width();
+  uint64_t h = view_height();
+  q->i = (index / h) % w;
+  q->j = index % h;
 
   // disable anti-aliasing
   q->_i = (float)(q->i) + 0.5f;
@@ -130,14 +143,12 @@ static void ris(pixel_t q, reservoir_t *r) {
     return;
   }
 
-  const int max_length = 10;
-  const int M = 8;
   for(int i = 0; i < M; i++) {
     // generate path tree
-    while(path.length < max_length) {
+    while(path.length < MAX_LENGTH_PATHS) {
       // sample light source
       if(nee_sample(&path)) break;
-      
+
       // path.throughput == p_hat/pdf and mis weight = 1
       update(r, &path, path.throughput, 1.);
       path_pop(&path);
@@ -220,7 +231,7 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r
     s->W = 0.;
   
   // confidence capping
-  if(s->c > 100.) s->c = 100.;
+  if(s->c > CONFIDENCE_CAP) s->c = (double)CONFIDENCE_CAP;
 }
 
 static void random_neighbor(pixel_t q, const path_t *path, reservoir_t **n, pixel_t *q_n) {
@@ -230,7 +241,7 @@ static void random_neighbor(pixel_t q, const path_t *path, reservoir_t **n, pixe
   int l, m; // int instead of uint64_t so they can be negative (important for clamping)
 
   // GRIS paper uses 7x7 for dense pixel blocks, radius 10 for real time (?)
-  const int d = 10; // sample with radius 5 (11 x 11) square neighborhood
+  const int d = NEIGHBOUR_RADIUS; // sample with radius 5 => 11 x 11 square neighborhood
   const int MAX_ATTEMPTS = 10; // when i == l && j == m or neighbor not geometrically similar enough
   for(int k = 0; k < MAX_ATTEMPTS; k++) {
     // TODO: make edge clamping uniform probablility
@@ -301,23 +312,13 @@ void sampler_cleanup(sampler_t *s) {
   free(s);
 }
 
-void sampler_prepare_frame(sampler_t *s) { 
-  uint64_t w = view_width();
-  uint64_t h = view_height();
-  uint64_t i, j;
+void sampler_prepare_sample(uint64_t index) {
   pixel_t q;
-  
-  // for each pixel on screen, perform initial RIS
-  for(i = 0; i < w; i++) {
-    for(j = 0; j < h; j++) {
-      q.i = i;
-      q.j = j;
-      get_pixel(0, &q, 0); // only set _i, and _j
-      ris(q, &s->reservoirs[i][j]);
-    }
-  }
+  get_pixel_linear(index, &q);
+  ris(q, &rt.sampler->reservoirs[q.i][q.j]);
 }
 
+void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
 void sampler_create_path(path_t *path)
@@ -342,14 +343,13 @@ void sampler_create_path(path_t *path)
 
   #if(1)
   // spatial re-use
-  const int neighbors = 3;
   {
   reservoir_t neighbor;
   reservoir_t *n;
   pixel_t q_n;
   neighbor.path = (path_t *)malloc(sizeof(path_t));
 
-  for(int k = 0; k < neighbors; k++) {
+  for(int k = 0; k < NEIGHBOUR_COUNT; k++) {
     // TODO: pick neighbors with low discrepancy sequence
     random_neighbor(q, r->path, &n, &q_n);
     neighbor.w_sum = n->w_sum;

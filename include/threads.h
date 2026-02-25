@@ -29,7 +29,7 @@ typedef struct threads_t
 
   // the job queue is really just a counter, the worker function view_* will know how to interpret that.
   uint64_t counter, end;
-  uint64_t px_counter, px_end;
+  uint64_t prepare_counter, prepare_end;
 
   // sync init:
   atomic_int_fast32_t init;
@@ -73,6 +73,7 @@ static inline threads_t *threads_init()
   for(int k=0;k<rt.num_threads;k++)
     pthread_pool_worker_init(t->worker + k, &t->pool, NULL);
   t->counter = t->end = 0;
+  t->prepare_counter = t->prepare_end = 0;
   t->init = 0;
 
   t->task = (pthread_pool_task_t *)malloc(sizeof(pthread_pool_task_t)*rt.num_threads);

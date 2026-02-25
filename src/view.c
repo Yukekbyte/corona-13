@@ -615,6 +615,17 @@ void view_write_images(const char *suffix)
 #endif
 }
 
+static void *prepare_sample(void *arg)
+{
+  threads_t *job = (threads_t *)arg;
+  while(1)
+  {
+    uint64_t i =  __sync_fetch_and_add(&job->prepare_counter, 1);
+    if(i >= job->prepare_end) return 0;
+    render_prepare_sample(i);
+  }
+}
+
 static void *work_sample(void *arg)
 {
   threads_t *job = (threads_t *)arg;
@@ -633,16 +644,36 @@ void view_render()
 
   const double time_begin = common_time_wallclock();
   // step sample counter globally in 1spp intervals:
-  const uint64_t end = t->counter + (uint64_t)rt.batch_frames * (uint64_t)(rt.view->width * rt.view->height);
-  t->counter = t->end;
-  t->end = end;
+  const uint64_t batch_size = (uint64_t)(rt.view->width * rt.view->height);
+  uint64_t start;
+  uint64_t end;
   // do this only now so they know how many samples the threads use
   lights_prepare_frame();
   sampler_prepare_frame(rt.sampler);
   pointsampler_prepare_frame(rt.pointsampler);
-  for(int k=0;k<rt.num_threads;k++)
-    pthread_pool_task_init(t->task + k, &t->pool, work_sample, t);
-  pthread_pool_wait(&t->pool);
+  
+  for(uint64_t frame = 0; frame < rt.batch_frames; frame++) {
+    start = t->end;
+    end = start + batch_size;
+    
+    t->counter = start;
+    t->end = end;
+
+    #ifdef RESTIR // ReSTIR requires extra passes
+    // initial RIS pass
+    t->prepare_counter = 0;
+    t->prepare_end = batch_size;
+    for(int k=0;k<rt.num_threads;k++)
+      pthread_pool_task_init(t->task + k, &t->pool, prepare_sample, t);
+    pthread_pool_wait(&t->pool);
+
+    // Spatial re-use pass
+    #endif
+    
+    for(int k=0;k<rt.num_threads;k++)
+      pthread_pool_task_init(t->task + k, &t->pool, work_sample, t);
+    pthread_pool_wait(&t->pool);
+  }
 
   // accumulate last paths in markov chain and update gain
   pointsampler_finalize(rt.pointsampler);

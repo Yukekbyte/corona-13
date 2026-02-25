@@ -71,6 +71,10 @@ void pointsampler_splat(path_t *p, mf_t value)
   render_splat(p, value);
 }
 
+void pointsampler_prepare_sample(uint64_t index) {
+  sampler_prepare_sample(index);
+}
+
 void pointsampler_mutate(path_t *curr, path_t *tent)
 {
   path_init(tent, tent->index, tent->sensor.camid);

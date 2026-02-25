@@ -25,6 +25,10 @@ typedef struct sampler_t sampler_t;
 
 sampler_t *sampler_init();
 void sampler_cleanup(sampler_t *s);
+
+// preperation phase for sample with given index (mostly for ReSTIR passes)
+void sampler_prepare_sample(uint64_t index);
+
 void sampler_prepare_frame(sampler_t *s);
 void sampler_clear(sampler_t *s);
 
