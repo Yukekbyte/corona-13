@@ -63,6 +63,9 @@ float randf() {
   return rand() / (float)RAND_MAX; 
 }
 
+// fractional part of float
+static inline float fractf(float x) { return x - floorf(x); }
+
 static void get_pixel(const uint64_t index, pixel_t *q) {
   pointsampler_pixel(index, &q->i, &q->j, &q->_i, &q->_j);
 }
@@ -117,8 +120,8 @@ static void ris(pixel_t q, reservoir_t *r) {
   
   // early return when path on envmap
   if(path.v[path.length-1].flags & s_environment) {
-    // give r no confidence but manually update r->path
-    // this means r->path is not a null sample but r->c is zero! (tricky case...)
+    // give reservoir non-zero confidence to serve as indicator
+    r->c = 1;
     path_copy(r->path, &path);
     return;
   }
@@ -214,10 +217,7 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r
   if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
 }
 
-// fractional part of float
-static inline float fractf(float x) { return x - floorf(x); }
-
-// R2 sequence
+// Pick neighbours with R2 sequence
 // Partly ChatGPT
 static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pixel_t *qns)
 {
@@ -334,46 +334,51 @@ void sampler_cleanup(sampler_t *s) {
 }
 
 void sampler_prepare_sample(uint64_t index) {
+  // get pixels linearly
   pixel_t q;
   get_pixel_linear(index, &q);
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
-  // intial RIS
+  // Intial RIS
   r->path->index = index;
   ris(q, r);
+}
+
+void sampler_pass_sample(uint64_t index) {
+  // get pixels with pointsampler sequence to avoid artifacts and race conditions
+  pixel_t q;
+  get_pixel(index, &q);
+  reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
+
+  // check for env map hit
+  if(not_null(r->path) && r->path->v[r->path->length-1].flags & s_environment) return;
+
+  // Spatial re-use pass
+  reservoir_t *ns[NEIGHBOUR_COUNT];
+  pixel_t qns[NEIGHBOUR_COUNT];
+  random_neighbors(q, r->path, ns, qns);
+  
+  for(int k = 0; k < NEIGHBOUR_COUNT; k++)
+    combine(q, r, qns[k], ns[k]);
 }
 
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
 void sampler_create_path(path_t *path)
-{  
-  // get pixel & reservoir from path index
-  reservoir_t *r;
+{
   pixel_t q;
-  get_pixel(path->index, &q);
-  r = &rt.sampler->reservoirs[q.i][q.j];
-  r->path->index = path->index;
-
-  // check for env map hit
-  if(not_null(r->path) && r->path->v[r->path->length-1].flags & s_environment) {
-    pointsampler_splat(r->path, path_throughput(r->path));
-    return;
-  }
-
-  #if(1)
-  // spatial re-use
-  reservoir_t *ns[NEIGHBOUR_COUNT];
-  pixel_t qns[NEIGHBOUR_COUNT];
-  // TODO: pick neighbors with low discrepancy sequence
-  random_neighbors(q, r->path, ns, qns);
-  
-  for(int k = 0; k < NEIGHBOUR_COUNT; k++)
-    combine(q, r, qns[k], ns[k]);
-  #endif
+  get_pixel_linear(path->index, &q);
+  reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
   // don't splat null sample
   if(is_null(r->path)) return;
+
+  // check for env map hit
+  if(r->path->v[r->path->length-1].flags & s_environment) {
+    pointsampler_splat(r->path, path_throughput(r->path));
+    return;
+  }
 
   // estimator f(r.Y) * r.W
   pointsampler_splat(r->path, md_2f(f(r->path) * r->W));

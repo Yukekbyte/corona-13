@@ -626,6 +626,17 @@ static void *prepare_sample(void *arg)
   }
 }
 
+static void *pass_sample(void *arg)
+{
+  threads_t *job = (threads_t *)arg;
+  while(1)
+  {
+    uint64_t i =  __sync_fetch_and_add(&job->prepare_counter, 1);
+    if(i >= job->prepare_end) return 0;
+    sampler_pass_sample(i);
+  }
+}
+
 static void *work_sample(void *arg)
 {
   threads_t *job = (threads_t *)arg;
@@ -668,11 +679,25 @@ void view_render()
     pthread_pool_wait(&t->pool);
 
     // Spatial re-use pass
-    // t->prepare_counter = 0;
-    // t->prepare_end = batch_size;
-    // for(int k=0;k<rt.num_threads;k++)
-    //   pthread_pool_task_init(t->task + k, &t->pool, prepare_sample, t);
-    // pthread_pool_wait(&t->pool);
+    t->prepare_counter = start;
+    t->prepare_end = end;
+    for(int k=0;k<rt.num_threads;k++)
+      pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
+    pthread_pool_wait(&t->pool);
+
+    // Spatial re-use pass
+    t->prepare_counter = start;
+    t->prepare_end = end;
+    for(int k=0;k<rt.num_threads;k++)
+      pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
+    pthread_pool_wait(&t->pool);
+
+    // Spatial re-use pass
+    t->prepare_counter = start;
+    t->prepare_end = end;
+    for(int k=0;k<rt.num_threads;k++)
+      pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
+    pthread_pool_wait(&t->pool);
     #endif
     
     for(int k=0;k<rt.num_threads;k++)
