@@ -60,19 +60,36 @@ float pointsampler(path_t *p, int dim)
   return points_rand(rt.points, tid);
 }
 
-void pointsampler_pixel(uint64_t index, float *pixel_i, float *pixel_j)
+void pointsampler_pixel_linear(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j)
 {
-  *pixel_i = halton_sample(&rt.pointsampler->h, s_dim_image_x, index)*view_width();
-  *pixel_j = halton_sample(&rt.pointsampler->h, s_dim_image_y, index)*view_height();
+  uint64_t width  = view_width();
+  uint64_t height = view_height();
+  uint64_t total = width * height;
+
+  uint64_t wrapped = index % total;
+
+  *x = wrapped % width;
+  *y = wrapped / width;
+
+  pointsampler_subpixel(*x, *y, pixel_i, pixel_j);
+}
+
+void pointsampler_pixel(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j)
+{
+  *x = (uint64_t)(halton_sample(&rt.pointsampler->h, s_dim_image_x, index)*view_width());
+  *y = (uint64_t)(halton_sample(&rt.pointsampler->h, s_dim_image_y, index)*view_height());
+
+  pointsampler_subpixel(*x, *y, pixel_i, pixel_j);
+}
+
+void pointsampler_subpixel(uint64_t x, uint64_t y, float *pixel_i, float*pixel_j) {
+  *pixel_i = (float)x + 0.5f;
+  *pixel_j = (float)y + 0.5f;
 }
 
 void pointsampler_splat(path_t *p, mf_t value)
 {
   render_splat(p, value);
-}
-
-void pointsampler_prepare_sample(uint64_t index) {
-  sampler_prepare_sample(index);
 }
 
 void pointsampler_mutate(path_t *curr, path_t *tent)

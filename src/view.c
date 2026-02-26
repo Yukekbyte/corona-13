@@ -622,7 +622,7 @@ static void *prepare_sample(void *arg)
   {
     uint64_t i =  __sync_fetch_and_add(&job->prepare_counter, 1);
     if(i >= job->prepare_end) return 0;
-    render_prepare_sample(i);
+    sampler_prepare_sample(i);
   }
 }
 
@@ -661,13 +661,18 @@ void view_render()
 
     #ifdef RESTIR // ReSTIR requires extra passes
     // initial RIS pass
-    t->prepare_counter = 0;
-    t->prepare_end = batch_size;
+    t->prepare_counter = start;
+    t->prepare_end = end;
     for(int k=0;k<rt.num_threads;k++)
       pthread_pool_task_init(t->task + k, &t->pool, prepare_sample, t);
     pthread_pool_wait(&t->pool);
 
     // Spatial re-use pass
+    // t->prepare_counter = 0;
+    // t->prepare_end = batch_size;
+    // for(int k=0;k<rt.num_threads;k++)
+    //   pthread_pool_task_init(t->task + k, &t->pool, prepare_sample, t);
+    // pthread_pool_wait(&t->pool);
     #endif
     
     for(int k=0;k<rt.num_threads;k++)

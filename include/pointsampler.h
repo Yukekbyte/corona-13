@@ -34,7 +34,9 @@ pointsampler_t *pointsampler_init(uint64_t frame);
 
 // get random number:
 float pointsampler(struct path_t *p, int dim);
-void pointsampler_pixel(uint64_t index, float *pixel_i, float *pixel_j);
+void pointsampler_pixel_linear(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j);
+void pointsampler_pixel(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j);
+void pointsampler_subpixel(uint64_t x, uint64_t y, float *pixel_i, float*pixel_j);
 
 void pointsampler_splat(struct path_t *p, mf_t value);
 
@@ -46,9 +48,6 @@ int pointsampler_accept(struct path_t *curr, struct path_t *tent);
 // mutate path into new_path
 void pointsampler_mutate(struct path_t *curr, struct path_t *tent);
 void pointsampler_mutate_with_pixel(struct path_t *curr, struct path_t *tent, float i, float j);
-
-// preperation phase for sample with given index (mostly for ReSTIR passes)
-void pointsampler_prepare_sample(uint64_t index);
 
 void pointsampler_clear();
 void pointsampler_cleanup(pointsampler_t *s);
