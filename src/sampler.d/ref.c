@@ -26,40 +26,37 @@ typedef struct sampler_t {} sampler_t;
 
 sampler_t *sampler_init() {return 0;}
 void sampler_cleanup(sampler_t *s) {}
+void sampler_prepare_sample(uint64_t index) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-// set pixel of paths ourself to control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
-static void get_pixel(uint64_t index, uint64_t *i, uint64_t *j) {
-  // uint64_t w = view_width();
-  // uint64_t h = view_height();
-  // *i = (index / h) % w;
-  // *j = index % h;
-  // halton sequence
-  float pixel_i, pixel_j;
-  pointsampler_pixel(index, &pixel_i, &pixel_j);
-  *i = (uint64_t)(pixel_i);
-  *j = (uint64_t)(pixel_j);
+static void get_pixel_linear(uint64_t index, uint64_t *i, uint64_t *j, float *_i, float *_j) {
+  pointsampler_pixel_linear(index, i, j, _i, _j);
 }
 
 void sampler_create_path(path_t *path)
 {  
   // get pixel from path index
-  //uint64_t i, j;
-  //get_pixel(path->index, &i, &j);
+  uint64_t i, j;
+  float _i, _j;
+  get_pixel_linear(path->index, &i, &j, &_i, &_j);
+  path_set_pixel(path, _i, _j);
   
   // extend path once to determine pixel on camera and first vertex
-  //path_init(path, path->index, path->sensor.camid);
   if(path_extend(path)) return;
-  //path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
 
-  // direct illumination
-  if(nee_sample(path)) return;
+  const int max_length = 10;
+  while(path->length < max_length) {
+    // sample light source
+    if(nee_sample(path)) break;
 
-  //if(!path_visible(path, 3)) return;
+    // path.throughput == p_hat/pdf
+    pointsampler_splat(path, path->throughput);
+    path_pop(path);
 
-  pointsampler_splat(path, path_throughput(path));
-  return;
+    // extend path
+    if(path_extend(path)) break;
+  }
 }
 
 mf_t sampler_throughput(path_t *path)
@@ -94,5 +91,5 @@ md_t sampler_sum_pdf_dwp(path_t *p)
 
 void sampler_print_info(FILE *fd)
 {
-  fprintf(fd, "sampler  : di\n");
+  fprintf(fd, "sampler  : ref\n");
 }

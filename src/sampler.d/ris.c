@@ -44,19 +44,8 @@ static double random_uniform() {
   return ((double)rand()/(double)RAND_MAX);
 }
 
-// set pixel of paths ourself to control/disable anti-aliasing (necessary because we use only one reservoir per pixel)
-static void get_pixel(uint64_t index, uint64_t *i, uint64_t *j) {
-  // standard loop through screen pixels:
-  //           w
-  //       0 1 2  3  4
-  //      ------------
-  //    0| 0 3 6 9  12
-  //  h 1| 1 4 7 10 13
-  //    2| 2 5 8 11 14 (15 wraps back to index 0)
-  uint64_t w = view_width();
-  uint64_t h = view_height();
-  *i = (index / h) % w;
-  *j = index % h;
+static void get_pixel_linear(uint64_t index, uint64_t *i, uint64_t *j, float *pixel_i, float *pixel_j) {
+  pointsampler_pixel_linear(index, i, j, pixel_i, pixel_j);
 }
 
 // Updates reservoir with sample and weight.
@@ -127,6 +116,7 @@ void sampler_cleanup(sampler_t *s) {
   free(s->reservoirs);
   free(s);
 }
+void sampler_prepare_sample(uint64_t index) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
@@ -147,17 +137,30 @@ static void ris(reservoir_t *r, const path_t *init_path) {
   path_copy(&path, init_path);
   
   const int max_length = 10;
-  while(path.length < max_length) {
-    // sample light source
-    if(nee_sample(&path)) break;
-    
-    // path.throughput == p_hat/pdf and mis weight = 1
-    update(r, &path, path.throughput, 1.);
-    path_pop(&path);
-    
-    // extend path
-    if(path_extend(&path)) break;  
+  const int M = 8;
+  for(int i = 0; i < M; i++) {
+    while(path.length < max_length) {
+      // sample light source
+      if(nee_sample(&path)) break;
+      
+      // path.throughput == p_hat/pdf and mis weight = 1
+      md_t phat = p_hat(&path);
+      md_t pdf = path_pdf(&path);
+      if(phat > 0. && pdf > 0.)
+        update(r, &path, phat/pdf, 1.);
+      else
+        r->c += 1.;
+      path_pop(&path);
+      
+      // extend path
+      if(path_extend(&path)) break;  
+    }
+
+    while(path.length > 2) path_pop(&path);
+    path.lambda = spectrum_sample_lambda(fmodf(pointsampler(&path, s_dim_lambda), 1.0f), NULL);
   }
+
+  r->w_sum *= 1./M;
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
   if(not_null(r->path)) {
@@ -169,13 +172,14 @@ void sampler_create_path(path_t *path)
 {  
   // get pixel & reservoir from path index
   uint64_t i, j;
+  float _i, _j;
   reservoir_t *r;
-  get_pixel(path->index, &i, &j);
+  get_pixel_linear(path->index, &i, &j, &_i, &_j);
   r = &rt.sampler->reservoirs[i][j];
   
   // extend path once to determine pixel on camera and first vertex
   path_init(path, path->index, path->sensor.camid);
-  path_set_pixel(path, (float)i+0.5f, (float)j+0.5f); // +0.5 for center of pixel (no anti-aliasing!)
+  path_set_pixel(path, _i, _j);
   if(path_extend(path)) return;
 
   // check for env map hit
@@ -188,14 +192,10 @@ void sampler_create_path(path_t *path)
   ris(r, path);
 
   // don't splat null sample
-  if(is_null(r->path)) {
-    return; 
-  }
+  if(is_null(r->path)) return;
 
   // estimator f(r.Y) * r.W
   pointsampler_splat(r->path, md_2f(f(r->path) * r->W));
-  
-  path_copy(path, r->path);
 }
 
 mf_t sampler_throughput(path_t *path)
