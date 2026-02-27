@@ -74,12 +74,6 @@ static void get_pixel_linear(const uint64_t index, pixel_t *q) {
   pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
 }
 
-static void path_from_pixel(pixel_t q, path_t *path) {
-  path_init(path, 0, 0); // TODO potentially update camid if using other cameras (see sampler_create_path)
-  path_set_pixel(path, q._i, q._j);
-  path_extend(path);
-}
-
 // Updates reservoir with sample and weight.
 // Returns 1 if sample was replaced, 0 if not.
 static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
@@ -108,41 +102,45 @@ static md_t p_hat(path_t *path) {
 // Perform Resampled Importance Sampling (streaming RIS)
 // r will be reset and filled with initial samples for pixel q
 static void ris(pixel_t q, reservoir_t *r) {
-  
   // reset
   set_null(r->path);
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
-  
-  path_t path;
-  path_from_pixel(q, &path);
-  
-  // early return when path on envmap
-  if(path.v[path.length-1].flags & s_environment) {
-    // give reservoir non-zero confidence to serve as indicator
-    r->c = 1;
-    path_copy(r->path, &path);
-    return;
-  }
 
   for(int i = 0; i < M; i++) {
+    path_t path;
+    path_init(&path, 0, 0);
+    path_set_pixel(&path, q._i, q._j);
+    
+    if(path_extend(&path)) break;
+
+    if(path.v[path.length-1].flags & s_environment) {
+      // give reservoir non-zero confidence to serve as indicator
+      r->c = 1;
+      path_copy(r->path, &path);
+      break;
+    }
+    
     // generate path tree
     while(path.length < MAX_LENGTH_PATHS) {
       // sample light source
       if(nee_sample(&path)) break;
 
-      // path.throughput == p_hat/pdf and mis weight = 1
-      update(r, &path, path.throughput, 1.);
+      md_t phat = p_hat(&path);
+      md_t pdf = path_pdf(&path);
+      if(phat > 0. && pdf > 0.)
+        update(r, &path, phat/pdf, 1.); // mis weight = 1 in same path tree
+      else
+        r->c += 1.;
       path_pop(&path);
       
       // extend path
       if(path_extend(&path)) break;  
     }
-
-    while(path.length > 2) path_pop(&path);
   }
 
+  // mis weights for each chosen sample per path tree 1/M (added later for simplicity...)
   r->w_sum *= 1./M;
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
@@ -279,10 +277,28 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
         pixel_t *qn = &qns[found];
         qn->i = (uint64_t)l;
         qn->j = (uint64_t)m;
+        reservoir_t *n = &rt.sampler->reservoirs[qn->i][qn->j];
+        
+        // Check for geometric similarity (up to a point)
+        if(k <= 3*NEIGHBOUR_COUNT && k <= 0.5*MAX_ATTEMPTS) {
+          // angle between normals < 25 deg (0.435 rad) 
+          if(acosf(dotproduct(path->v[1].hit.n, n->path->v[1].hit.n)) > 0.436f) {
+            k++;
+            continue;
+          }
+        
+          // depth difference can't be more than 10 percent
+          float depthratio = path->e[1].dist / n->path->e[1].dist;
+          if(depthratio < 0.9f || 1.1f < depthratio) {
+            k++;
+            continue;
+          }
+        }
 
         pointsampler_subpixel(qn->i, qn->j, &qn->_i, &qn->_j);
 
-        ns[found] = &rt.sampler->reservoirs[qn->i][qn->j];
+        ns[found] = n;
+        
         found++;
         k++;
     }
@@ -340,7 +356,6 @@ void sampler_prepare_sample(uint64_t index) {
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
   // Intial RIS
-  r->path->index = index;
   ris(q, r);
 }
 
@@ -373,12 +388,6 @@ void sampler_create_path(path_t *path)
 
   // don't splat null sample
   if(is_null(r->path)) return;
-
-  // check for env map hit
-  if(r->path->v[r->path->length-1].flags & s_environment) {
-    pointsampler_splat(r->path, path_throughput(r->path));
-    return;
-  }
 
   // estimator f(r.Y) * r.W
   pointsampler_splat(r->path, md_2f(f(r->path) * r->W));

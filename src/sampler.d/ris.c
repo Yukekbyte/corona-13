@@ -122,23 +122,22 @@ void sampler_clear(sampler_t *s) {}
 
 // Perform Resampled Importance Sampling (streaming RIS)
 // r is an unused reservoir (will be reset).
-// init_path is an initial path for DI that has only 2 vertices starting from camera, no light source yet.
-static void ris(reservoir_t *r, const path_t *init_path) {
-  assert(init_path->length == 2); // only camera vertex and hitpoint
-  assert(!(init_path->v[2].flags & s_environment));
-
+static void ris(reservoir_t *r, uint64_t index, float _i, float _j) {
   // reset
   set_null(r->path);
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
 
-  path_t path;
-  path_copy(&path, init_path);
-  
   const int max_length = 10;
   const int M = 8;
   for(int i = 0; i < M; i++) {
+    path_t path;
+    path_init(&path, index, 0);
+    path_set_pixel(&path, _i, _j);
+
+    if(path_extend(&path)) return;
+
     while(path.length < max_length) {
       // sample light source
       if(nee_sample(&path)) break;
@@ -155,9 +154,6 @@ static void ris(reservoir_t *r, const path_t *init_path) {
       // extend path
       if(path_extend(&path)) break;  
     }
-
-    while(path.length > 2) path_pop(&path);
-    path.lambda = spectrum_sample_lambda(fmodf(pointsampler(&path, s_dim_lambda), 1.0f), NULL);
   }
 
   r->w_sum *= 1./M;
@@ -177,19 +173,8 @@ void sampler_create_path(path_t *path)
   get_pixel_linear(path->index, &i, &j, &_i, &_j);
   r = &rt.sampler->reservoirs[i][j];
   
-  // extend path once to determine pixel on camera and first vertex
-  path_init(path, path->index, path->sensor.camid);
-  path_set_pixel(path, _i, _j);
-  if(path_extend(path)) return;
-
-  // check for env map hit
-  if(path->v[path->length-1].flags & s_environment) {
-    pointsampler_splat(path, path_throughput(path));
-    return;
-  }
-
   // inital candidate generation
-  ris(r, path);
+  ris(r, path->index, _i, _j);
 
   // don't splat null sample
   if(is_null(r->path)) return;
