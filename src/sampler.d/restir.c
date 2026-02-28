@@ -30,7 +30,7 @@
 #define MAX_LENGTH_PATHS 10
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-#define SPATIAL_REUSE_PASSES 3
+//#define SPATIAL_REUSE_PASSES 3
 #define CONFIDENCE_CAP 100. // is a double
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
@@ -179,9 +179,6 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r
   path_t s_path_from_qr;
   md_t mis_r;
   md_t mis_s;
-  md_t w_r;
-  md_t w_s;
-
   float Jr = shift(&r_path_from_qs, qs, r->path);
   float Js = shift(&s_path_from_qr, qr, s->path);
 
@@ -197,17 +194,51 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r
     mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path) + s->c * p_hat(&r_path_from_qs) * Jr);
   
   // resampling weights
-  w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
-  w_s = mis_s * p_hat(s->path) * s->W;
+  md_t w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
+  md_t w_s = mis_s * p_hat(s->path) * s->W;
 
   // combine reservoirs in s
   s->w_sum = w_s;
   update(s, &r_path_from_qs, w_r, r->c);
 
   // update estimator
-  if(not_null(s->path)) {
+  if(not_null(s->path))
     s->W = s->w_sum / p_hat(s->path);
-  }
+  else
+    s->W = 0.;
+  
+  // confidence capping
+  if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
+}
+
+// Combine reservoir s with r.
+// Assumes s and r come from the same domain (pixel)
+static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
+  // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
+  if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
+
+  // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
+  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
+  
+  // Shift lambda of r
+  //r->path->lambda = spectrum_sample_lambda(pointsampler(r->path, s_dim_lambda), NULL);
+
+  // MIS weights
+  double total = (s->c + r->c);
+  double mis_s = s->c / total;
+  double mis_r = r->c / total;
+  
+  // resampling weights
+  md_t w_r = mis_r * p_hat(r->path) * r->W;
+  md_t w_s = mis_s * p_hat(s->path) * s->W;
+
+  // combine reservoirs in s
+  s->w_sum = w_s;
+  update(s, r->path, w_r, r->c);
+
+  // update estimator
+  if(not_null(s->path))
+    s->W = s->w_sum / p_hat(s->path);
   else
     s->W = 0.;
   
@@ -354,9 +385,16 @@ void sampler_prepare_sample(uint64_t index) {
   pixel_t q;
   get_pixel_linear(index, &q);
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
+  reservoir_t new;
+  new.path = (path_t *)malloc(sizeof(path_t));
 
   // Intial RIS
-  ris(q, r);
+  ris(q, &new);
+
+  // combine with temporal neighbour (previous reservoir)
+  combine_temporal(r, &new);
+
+  free(new.path);
 }
 
 void sampler_pass_sample(uint64_t index) {
