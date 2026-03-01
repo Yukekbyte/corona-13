@@ -26,11 +26,13 @@
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
 
-#define M 8
+#define M 4
 #define MAX_LENGTH_PATHS 10
-#define NEIGHBOUR_COUNT 4
+#define NEIGHBOUR_COUNT 5
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-//#define SPATIAL_REUSE_PASSES 3
+#define PAIRWISE_COMBINE 1
+#define SPATIAL_REUSE_PASSES 2
+#define TEMPORAL_REUSE 0
 #define CONFIDENCE_CAP 100. // is a double
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
@@ -51,6 +53,7 @@ typedef struct pixel_t {
 
 typedef struct sampler_t {
   reservoir_t **reservoirs;
+  int spatial_reuse_passes;
 } sampler_t;
 
 // returns random double between 0 and 1
@@ -76,20 +79,11 @@ static void get_pixel_linear(const uint64_t index, pixel_t *q) {
 
 // Updates reservoir with sample and weight.
 // Returns 1 if sample was replaced, 0 if not.
-static int update(reservoir_t *r, path_t *path, md_t weight, double c) {
+static void update(reservoir_t *r, path_t *path, md_t weight, double c) {
   r->w_sum += weight;
   r->c += c;
-  if (random_uniform() * r->w_sum < weight) {
+  if (random_uniform() * r->w_sum < weight)
     path_copy(r->path, path);
-    return 1;
-  }
-  return 0;
-}
-
-static md_t f(path_t *path) {
-  if(is_null(path))
-    return 0.0;
-  return path_measurement_contribution_dx(path, 0, path->length-1);
 }
 
 // Use the integrand f as target function p_hat
@@ -166,9 +160,9 @@ float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
   return J;
 }
 
-// Combine reservoir s with r.
-// The sample in r (r->path) will be shifted to the domain (pixel) of the sample in s (s->path).
-static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r) {
+#if PAIRWISE_COMBINE
+// Combine, but with only two reservoirs
+static void combine_pair(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r) {
   // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
   if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
 
@@ -210,7 +204,91 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r
   // confidence capping
   if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
 }
+#else
+md_t p_hat_from(path_t *y, pixel_t q) {
+  path_t x;
+  float J = shift(&x, q, y);
+  if(not_null(&x))
+    return p_hat(&x) * J;
+  return 0;
+}
 
+md_t p_hat_from_opt(path_t *x, float J) {
+  return p_hat(x) / J;
+}
+
+md_t mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
+  if(is_null(y)) return 0.0;
+  
+  md_t num = cy * p_hat_from_opt(x, J);
+  if(num <= 0.0) return 0.0;
+  
+  md_t denom = num;
+  for(int i = 0; i < NEIGHBOUR_COUNT; i++)
+    denom += c[i] * p_hat_from(y, q[i]);
+
+  return num / denom;
+}
+
+// Combine multiple reservoirs in s
+// The samples in r[] (r[i]->path) will be shifted to the domain (pixel) of the sample in s (s->path).
+static void combine(pixel_t qs, reservoir_t *s, pixel_t qr[], reservoir_t *r[]) {
+  for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
+    // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
+    if(s == r[i]) { printf("tried to combine reservoir with itself\n"); return; }
+    // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
+    if(s->c <= 0. && r[i]->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
+  }
+
+  path_t Y[NEIGHBOUR_COUNT];
+  float J[NEIGHBOUR_COUNT];
+  double c[NEIGHBOUR_COUNT];
+  md_t m[NEIGHBOUR_COUNT];
+  md_t m_s;
+  for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
+    J[i] = shift(&Y[i], qs, r[i]->path);
+    c[i] = r[i]->c;
+  }
+
+  // MIS weights
+  m_s = mis(s->path, s->path, 1.0f, s->c, qr, c);
+
+  for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
+    pixel_t q = qr[i];
+    double cy = c[i];
+
+    qr[i] = qs;
+    c[i] = s->c;
+    
+    m[i] = mis(r[i]->path, &Y[i], J[i], cy, qr, c);
+
+    qr[i] = q;
+    c[i] = cy;
+  }
+
+  md_t w[NEIGHBOUR_COUNT];
+  md_t w_s = m_s * p_hat(s->path) * s->W;
+  s->w_sum = w_s;
+  for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
+    // resampling weight
+    w[i] = m[i] * p_hat(&Y[i]) * r[i]->W * J[i];
+
+    // combine reservoirs in s
+    update(s, &Y[i], w[i], c[i]);
+  }
+
+  // update estimator
+  if(not_null(s->path))
+    s->W = s->w_sum / p_hat(s->path);
+  else
+    s->W = 0.;
+  
+  // confidence capping
+  if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
+}
+#endif
+
+#if TEMPORAL_REUSE
 // Combine reservoir s with r.
 // Assumes s and r come from the same domain (pixel)
 static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
@@ -220,7 +298,7 @@ static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
   // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
   
-  // Shift lambda of r
+  // Shift lambda of r, should be deterministic
   //r->path->lambda = spectrum_sample_lambda(pointsampler(r->path, s_dim_lambda), NULL);
 
   // MIS weights
@@ -245,6 +323,7 @@ static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
   // confidence capping
   if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
 }
+#endif
 
 // Pick neighbours with R2 sequence
 // Partly ChatGPT
@@ -362,6 +441,8 @@ sampler_t *sampler_init() {
     }
   }
 
+  s->spatial_reuse_passes = SPATIAL_REUSE_PASSES;
+
   return s;
 }
 
@@ -385,18 +466,22 @@ void sampler_prepare_sample(uint64_t index) {
   pixel_t q;
   get_pixel_linear(index, &q);
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
+  
+  #if TEMPORAL_REUSE
   reservoir_t new;
   new.path = (path_t *)malloc(sizeof(path_t));
-
   // Intial RIS
   ris(q, &new);
-
   // combine with temporal neighbour (previous reservoir)
   combine_temporal(r, &new);
-
   free(new.path);
+  #else
+  // Intial RIS
+  ris(q, r);
+  #endif
 }
 
+int sampler_passes() { return SPATIAL_REUSE_PASSES; }
 void sampler_pass_sample(uint64_t index) {
   // get pixels with pointsampler sequence to avoid artifacts and race conditions
   pixel_t q;
@@ -411,8 +496,12 @@ void sampler_pass_sample(uint64_t index) {
   pixel_t qns[NEIGHBOUR_COUNT];
   random_neighbors(q, r->path, ns, qns);
   
+  #if PAIRWISE_COMBINE
   for(int k = 0; k < NEIGHBOUR_COUNT; k++)
-    combine(q, r, qns[k], ns[k]);
+    combine_pair(q, r, qns[k], ns[k]);
+  #else
+  combine(q, r, qns, ns);
+  #endif
 }
 
 void sampler_prepare_frame(sampler_t *s) {}
@@ -428,7 +517,7 @@ void sampler_create_path(path_t *path)
   if(is_null(r->path)) return;
 
   // estimator f(r.Y) * r.W
-  pointsampler_splat(r->path, md_2f(f(r->path) * r->W));
+  pointsampler_splat(r->path, md_2f(path_measurement_contribution_dx(r->path, 0, r->path->length-1) * r->W));
 }
 
 mf_t sampler_throughput(path_t *path)
@@ -438,7 +527,7 @@ mf_t sampler_throughput(path_t *path)
     return 0;
 
   // measurement contribution f (in vertex area measure)
-  const md_t measurement = f(path);
+  const md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
   if(measurement <= 0.)
     return 0;
   

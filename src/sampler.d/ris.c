@@ -116,7 +116,6 @@ void sampler_cleanup(sampler_t *s) {
   free(s->reservoirs);
   free(s);
 }
-void sampler_prepare_sample(uint64_t index) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 

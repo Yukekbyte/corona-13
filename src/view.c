@@ -615,6 +615,7 @@ void view_write_images(const char *suffix)
 #endif
 }
 
+#ifdef RESTIR
 static void *prepare_sample(void *arg)
 {
   threads_t *job = (threads_t *)arg;
@@ -636,6 +637,7 @@ static void *pass_sample(void *arg)
     sampler_pass_sample(i);
   }
 }
+#endif
 
 static void *work_sample(void *arg)
 {
@@ -678,26 +680,14 @@ void view_render()
       pthread_pool_task_init(t->task + k, &t->pool, prepare_sample, t);
     pthread_pool_wait(&t->pool);
 
-    // Spatial re-use pass
-    t->prepare_counter = start;
-    t->prepare_end = end;
-    for(int k=0;k<rt.num_threads;k++)
+    for(int i=0;i<sampler_passes();i++) {
+      // Spatial re-use pass
+      t->prepare_counter = start;
+      t->prepare_end = end;
+      for(int k=0;k<rt.num_threads;k++)
       pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
-    pthread_pool_wait(&t->pool);
-
-    // // Spatial re-use pass
-    // t->prepare_counter = start;
-    // t->prepare_end = end;
-    // for(int k=0;k<rt.num_threads;k++)
-    //   pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
-    // pthread_pool_wait(&t->pool);
-
-    // // Spatial re-use pass
-    // t->prepare_counter = start;
-    // t->prepare_end = end;
-    // for(int k=0;k<rt.num_threads;k++)
-    //   pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
-    // pthread_pool_wait(&t->pool);
+      pthread_pool_wait(&t->pool);
+    }
     #endif
     
     for(int k=0;k<rt.num_threads;k++)

@@ -28,6 +28,7 @@ void sampler_cleanup(sampler_t *s);
 
 
 // preperation and pass phases for sample with given index (for ReSTIR)
+int sampler_passes();
 void sampler_pass_sample(uint64_t index);
 void sampler_prepare_sample(uint64_t index);
 
