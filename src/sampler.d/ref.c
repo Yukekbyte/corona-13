@@ -35,12 +35,6 @@ static void get_pixel_linear(uint64_t index, uint64_t *i, uint64_t *j, float *_i
 
 void sampler_create_path(path_t *path)
 {  
-  // get pixel from path index
-  uint64_t i, j;
-  float _i, _j;
-  get_pixel_linear(path->index, &i, &j, &_i, &_j);
-  path_set_pixel(path, _i, _j);
-  
   // extend path once to determine pixel on camera and first vertex
   if(path_extend(path)) return;
 
@@ -50,7 +44,8 @@ void sampler_create_path(path_t *path)
     if(nee_sample(path)) break;
 
     // path.throughput == p_hat/pdf
-    pointsampler_splat(path, path->throughput);
+    if(path->throughput > 0.0)
+      pointsampler_splat(path, path->throughput);
     path_pop(path);
 
     // extend path

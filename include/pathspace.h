@@ -288,6 +288,9 @@ mf_t path_pdf_extend_adjoint(const path_t *path, int v);
 // reverse a path's vertices, make data consistent.
 void path_reverse(path_t *path, const path_t *input);
 
+// create a shifted path with wavelength lambda.
+int path_shift_lambda(path_t *shifted, float lambda, const path_t *source_path);
+
 // create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end);
 

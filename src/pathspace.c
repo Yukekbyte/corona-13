@@ -493,7 +493,18 @@ void path_reverse(path_t *path, const path_t *input)
   // assert(fabs(f1 - f2) < 1e-1f*fmax(f1, f2));
 }
 
-// create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
+int path_shift_lambda(path_t *shifted, float lambda, const path_t *source_path) {
+  *shifted = *source_path;
+  shifted->lambda = lambda;
+
+  for(int v = 1; v < shifted->length; v++) {
+    if(path_edge_init_volume(shifted, v)) return -1;
+    shader_prepare(shifted, v);
+  }
+  
+  return 0;
+}
+
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end) {
   assert(source_path->length > end);
 

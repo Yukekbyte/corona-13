@@ -26,12 +26,12 @@
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
 
-#define M 4
+#define M 8
 #define MAX_LENGTH_PATHS 10
-#define NEIGHBOUR_COUNT 5
+#define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
 #define PAIRWISE_COMBINE 1
-#define SPATIAL_REUSE_PASSES 2
+#define SPATIAL_REUSE_PASSES 1
 #define TEMPORAL_REUSE 0
 #define CONFIDENCE_CAP 100. // is a double
 
@@ -299,7 +299,8 @@ static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
   if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
   
   // Shift lambda of r, should be deterministic
-  //r->path->lambda = spectrum_sample_lambda(pointsampler(r->path, s_dim_lambda), NULL);
+  
+  r->path->lambda = spectrum_sample_lambda(pointsampler(r->path, s_dim_lambda), NULL);
 
   // MIS weights
   double total = (s->c + r->c);
