@@ -47,6 +47,16 @@ void sampler_cleanup(sampler_t *s)
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
+static inline mf_t sampler_mis(const path_t *p)
+{
+  // this is just the hero wavelength weight:
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
+
 void sampler_create_path(path_t *path)
 {
   while(1)
@@ -55,8 +65,9 @@ void sampler_create_path(path_t *path)
     if(path->length == 2 && path->v[2].mode & s_emit)
     { // cannot be created by nee
       mf_t throughput = path_throughput(path);
+      const mf_t w = sampler_mis(path);
       if(mf_any(mf_gt(throughput, mf_set1(0.0f))))
-        pointsampler_splat(path, throughput);
+        pointsampler_splat(path, mf_mul(w, throughput));
     }
 
     if(path->length >= rt.sampler->max_path_len) return;
@@ -64,8 +75,9 @@ void sampler_create_path(path_t *path)
     if(nee_sample(path)) return;
     const int v2 = path->length-1;
     mf_t throughput = path_throughput(path);
+    const mf_t w = sampler_mis(path);
     if(mf_any(mf_gt(throughput, mf_set1(0.0f))) && (path->v[v2].mode & s_emit))
-      pointsampler_splat(path, throughput);
+      pointsampler_splat(path, mf_mul(w, throughput));
     path_pop(path);
   }
 }

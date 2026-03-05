@@ -44,7 +44,7 @@ void sampler_create_path(path_t *path)
     if(nee_sample(path)) break;
 
     // path.throughput == p_hat/pdf
-    if(path->throughput > 0.0)
+    if(mf_any(mf_gt(path->throughput, mf_set1(0.0))))
       pointsampler_splat(path, path->throughput);
     path_pop(path);
 

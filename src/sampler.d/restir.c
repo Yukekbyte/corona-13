@@ -20,14 +20,12 @@
 #include "sampler.h"
 #include "spectrum.h"
 #include "pointsampler.h"
-#include "pathspace/multichain.h"
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
 
 #define M 8
-#define MAX_LENGTH_PATHS 10
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
 #define PAIRWISE_COMBINE 1
@@ -39,9 +37,9 @@
 
 typedef struct reservoir_t {
   path_t *path; // output sample
-  md_t w_sum;   // sum of weights
+  double w_sum; // sum of weights
   double c;     // confidence weight of output (= the amount of samples behind the output sample)
-  md_t W;       // contribution weight: estimate for 1/p
+  double W;     // contribution weight: estimate for 1/p
 } reservoir_t;
 
 typedef struct pixel_t {
@@ -78,8 +76,7 @@ static void get_pixel_linear(const uint64_t index, pixel_t *q) {
 }
 
 // Updates reservoir with sample and weight.
-// Returns 1 if sample was replaced, 0 if not.
-static void update(reservoir_t *r, path_t *path, md_t weight, double c) {
+static void update(reservoir_t *r, path_t *path, double weight, double c) {
   r->w_sum += weight;
   r->c += c;
   if (random_uniform() * r->w_sum < weight)
@@ -87,10 +84,10 @@ static void update(reservoir_t *r, path_t *path, md_t weight, double c) {
 }
 
 // Use the integrand f as target function p_hat
-static md_t p_hat(path_t *path) {
+static double p_hat(path_t *path) {
   if(is_null(path))
     return 0.0;
-  return path_measurement_contribution_dx(path, 0, path->length-1);
+  return md_hsum(path_measurement_contribution_dx(path, 0, path->length-1));
 }
 
 // Perform Resampled Importance Sampling (streaming RIS)
@@ -117,14 +114,14 @@ static void ris(pixel_t q, reservoir_t *r) {
     }
     
     // generate path tree
-    while(path.length < MAX_LENGTH_PATHS) {
+    while(1) {
       // sample light source
-      if(nee_sample(&path)) break;
+      if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      md_t phat = p_hat(&path);
-      md_t pdf = path_pdf(&path);
+      double phat = p_hat(&path);
+      double pdf = md(path_pdf(&path), 0); // hero wavelength pdf
       if(phat > 0. && pdf > 0.)
-        update(r, &path, phat/pdf, 1.); // mis weight = 1 in same path tree
+        update(r, &path, phat/pdf, 1.); // mis weight is 1 for samples of same path tree because each sample has a different length
       else
         r->c += 1.;
       path_pop(&path);
@@ -134,7 +131,8 @@ static void ris(pixel_t q, reservoir_t *r) {
     }
   }
 
-  // mis weights for each chosen sample per path tree 1/M (added later for simplicity...)
+  // mis weights for each chosen sample per path tree is 1/M (
+  // added now instead of before for simplicity, is mathematically equivalent
   r->w_sum *= 1./M;
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
@@ -171,8 +169,8 @@ static void combine_pair(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir
   
   path_t r_path_from_qs;
   path_t s_path_from_qr;
-  md_t mis_r;
-  md_t mis_s;
+  double mis_r;
+  double mis_s;
   float Jr = shift(&r_path_from_qs, qs, r->path);
   float Js = shift(&s_path_from_qr, qr, s->path);
 
@@ -188,8 +186,8 @@ static void combine_pair(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir
     mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path) + s->c * p_hat(&r_path_from_qs) * Jr);
   
   // resampling weights
-  md_t w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
-  md_t w_s = mis_s * p_hat(s->path) * s->W;
+  double w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
+  double w_s = mis_s * p_hat(s->path) * s->W;
 
   // combine reservoirs in s
   s->w_sum = w_s;
@@ -205,7 +203,7 @@ static void combine_pair(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir
   if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
 }
 #else
-md_t p_hat_from(path_t *y, pixel_t q) {
+double p_hat_from(path_t *y, pixel_t q) {
   path_t x;
   float J = shift(&x, q, y);
   if(not_null(&x))
@@ -213,17 +211,17 @@ md_t p_hat_from(path_t *y, pixel_t q) {
   return 0;
 }
 
-md_t p_hat_from_opt(path_t *x, float J) {
+double p_hat_from_opt(path_t *x, float J) {
   return p_hat(x) / J;
 }
 
-md_t mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
+double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
   if(is_null(y)) return 0.0;
   
-  md_t num = cy * p_hat_from_opt(x, J);
+  double num = cy * p_hat_from_opt(x, J);
   if(num <= 0.0) return 0.0;
   
-  md_t denom = num;
+  double denom = num;
   for(int i = 0; i < NEIGHBOUR_COUNT; i++)
     denom += c[i] * p_hat_from(y, q[i]);
 
@@ -243,8 +241,8 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr[], reservoir_t *r[]) 
   path_t Y[NEIGHBOUR_COUNT];
   float J[NEIGHBOUR_COUNT];
   double c[NEIGHBOUR_COUNT];
-  md_t m[NEIGHBOUR_COUNT];
-  md_t m_s;
+  double m[NEIGHBOUR_COUNT];
+  double m_s;
   for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
     J[i] = shift(&Y[i], qs, r[i]->path);
     c[i] = r[i]->c;
@@ -266,8 +264,8 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr[], reservoir_t *r[]) 
     c[i] = cy;
   }
 
-  md_t w[NEIGHBOUR_COUNT];
-  md_t w_s = m_s * p_hat(s->path) * s->W;
+  double w[NEIGHBOUR_COUNT];
+  double w_s = m_s * p_hat(s->path) * s->W;
   s->w_sum = w_s;
   for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
     // resampling weight
@@ -420,21 +418,26 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     
 sampler_t *sampler_init() {
   uint64_t i, j;
-  uint64_t w = view_width(); // 1024 (standard)
-  uint64_t h = view_height(); // 576 (standard)
+  uint64_t w = view_width();
+  uint64_t h = view_height();
 
   sampler_t *s = (sampler_t *)malloc(sizeof(sampler_t));
+  if(s == NULL) goto fail;
 
   s->reservoirs = (reservoir_t**)malloc(w * sizeof(reservoir_t*));
+  if(s->reservoirs == NULL) goto fail;
+
   for(i = 0; i < w; i++) {
-    s->reservoirs[i] = (reservoir_t*)malloc(h * sizeof(reservoir_t));
+    if(posix_memalign((void**)&s->reservoirs[i], 32, h * sizeof(reservoir_t)))
+      goto fail;
   }
 
   reservoir_t *r;
   for(i = 0; i < w; i++) {
     for(j = 0; j < h; j++) {
       r = &s->reservoirs[i][j];
-      r->path = (path_t *)malloc(sizeof(path_t));
+      if(posix_memalign((void**)&r->path, 32, sizeof(path_t))) 
+        goto fail;
       set_null(r->path);
       r->w_sum = 0.;
       r->c = 0.;
@@ -445,6 +448,10 @@ sampler_t *sampler_init() {
   s->spatial_reuse_passes = SPATIAL_REUSE_PASSES;
 
   return s;
+
+  fail:
+    fprintf(stderr, "Memory allocation for reservoirs failed\n");
+    return s;
 }
 
 void sampler_cleanup(sampler_t *s) {
@@ -508,6 +515,16 @@ void sampler_pass_sample(uint64_t index) {
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
+static inline mf_t path_pdf_hero(const path_t *p)
+{
+  // this is just the hero wavelength weight:
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
+
 void sampler_create_path(path_t *path)
 {
   pixel_t q;
@@ -518,38 +535,10 @@ void sampler_create_path(path_t *path)
   if(is_null(r->path)) return;
 
   // estimator f(r.Y) * r.W
-  pointsampler_splat(r->path, md_2f(path_measurement_contribution_dx(r->path, 0, r->path->length-1) * r->W));
-}
+  const md_t estimator = md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W));
+  const mf_t w = path_pdf_hero(r->path);
 
-mf_t sampler_throughput(path_t *path)
-{
-  // if path length is 0, return 0
-  if(path->length < 1) 
-    return 0;
-
-  // measurement contribution f (in vertex area measure)
-  const md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
-  if(measurement <= 0.)
-    return 0;
-  
-  // accumulate pdf over path
-  md_t p = 1.;
-  for(int k=0; k < path->length; k++)
-    p = p * path_pdf_extend(path, k);
-
-  // return estimate f/pdf
-  return measurement / p;
-}
-
-md_t sampler_mis_weight(path_t *p)
-{
-  return md_set1(1.0);
-}
-
-md_t sampler_sum_pdf_dwp(path_t *p)
-{
-  // only used by hwl, hrec guided
-  return md_set1(1.0);
+  pointsampler_splat(r->path, mf_mul(w, md_2f(estimator)));
 }
 
 void sampler_print_info(FILE *fd)
