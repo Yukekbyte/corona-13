@@ -53,34 +53,12 @@ void sampler_create_path(path_t *path)
   }
 }
 
-mf_t sampler_throughput(path_t *path)
-{
-  // if path length is 0, return 0
-  if(path->length < 1) return mf_set1(0.0f);
-
-  // measurement contribution f (in vertex area measure)
-  const md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
-  if(mf_all(mf_lte(md_2f(measurement), mf_set1(0.0f))))
-    return mf_set1(0.0f);
-  
-  // accumulate pdf over path
-  md_t pdf = md_set1(1.0);
-  for(int k=0;k<path->length;k++)
-    pdf = md_mul(pdf, mf_2d(path_pdf_extend(path, k)));
-
-  // return estimate f/pdf
-  return md_2f(md_div(measurement, pdf));
-}
-
-md_t sampler_mis_weight(path_t *p)
-{
-  return md_set1(1.0);
-}
-
 md_t sampler_sum_pdf_dwp(path_t *p)
 {
-  // only used by hwl, hrec guided
-  return md_set1(1.0);
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(mf_div(path_pdf_extend(p, v), mf_set1(path_G(p, v)))));
+  return pdf;
 }
 
 void sampler_print_info(FILE *fd)
