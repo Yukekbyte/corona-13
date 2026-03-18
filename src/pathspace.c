@@ -492,16 +492,29 @@ void path_reverse(path_t *path, const path_t *input)
   // assert(fabs(f1 - f2) < 1e-1f*fmax(f1, f2));
 }
 
-int path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source_path) {
-  *shifted = *source_path;
-  shifted->lambda = lambda;
+float path_shift_lambda(path_t *path, mf_t lambda) {
+  // evaluate pdf as if sampled
+  md_t old_pdf = md_set1(1.0);
+  for(int v=1;v<path->length;v++)
+    old_pdf = md_mul(old_pdf, mf_2d(mf_div(path_pdf_extend(path, v), mf_set1(path_G(path, v)))));
 
-  for(int v = 1; v < shifted->length; v++) {
-    if(path_edge_init_volume(shifted, v)) return -1;
-    shader_prepare(shifted, v);
+  if(md(old_pdf, 0) == 0.0) return 0.0;
+
+  path->lambda = lambda;
+
+  for(int v = 1; v < path->length; v++) {
+    if(path_edge_init_volume(path, v)) return 0.0;
+    shader_prepare(path, v);
   }
-  
-  return 0;
+
+  // evaluate pdf as if sampled
+  md_t new_pdf = md_set1(1.0);
+  for(int v=1;v<path->length;v++)
+    new_pdf = md_mul(new_pdf, mf_2d(mf_div(path_pdf_extend(path, v), mf_set1(path_G(path, v)))));
+
+  if(md(new_pdf, 0) == 0.0) return 0.0;
+
+  return md(new_pdf, 0) / md(old_pdf, 0);
 }
 
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end) {

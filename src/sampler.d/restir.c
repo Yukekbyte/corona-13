@@ -25,13 +25,15 @@
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
 
-#define M 8
+#define M 32
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
 #define PAIRWISE_COMBINE 1
-#define SPATIAL_REUSE_PASSES 1
+#define SPATIAL_REUSE_PASSES 3
+#define SPLAT_COUNT_CORRECTOR mf_set1(1.0f/((float)(M + SPATIAL_REUSE_PASSES + 1)))
 #define TEMPORAL_REUSE 0
-#define CONFIDENCE_CAP 100. // is a double
+#define LAMBDA_OFFSET 123.0f // is a float
+#define CONFIDENCE_CAP 256. // is a double
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
@@ -40,6 +42,7 @@ typedef struct reservoir_t {
   double w_sum; // sum of weights
   double c;     // confidence weight of output (= the amount of samples behind the output sample)
   double W;     // contribution weight: estimate for 1/p
+  uint8_t envmap;
 } reservoir_t;
 
 typedef struct pixel_t {
@@ -87,7 +90,29 @@ static void update(reservoir_t *r, path_t *path, double weight, double c) {
 static double p_hat(path_t *path) {
   if(is_null(path))
     return 0.0;
-  return md_hsum(path_measurement_contribution_dx(path, 0, path->length-1));
+  md_t f = path_measurement_contribution_dx(path, 0, path->length-1);
+  //static const double w_arr[8] = { 0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2 };
+  //md_t w = md_loadu(w_arr);
+  //return md_hsum(md_mul(f, w));
+  return md_hsum(f);
+}
+
+static inline mf_t path_pdf_hero(const path_t *p)
+{
+  // this is just the hero wavelength weight:
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
+
+static inline void splat(path_t *p, mf_t estimator) {
+  if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
+    const mf_t w = path_pdf_hero(p);
+    //pointsampler_splat(p, mf_mul(w, estimator));
+    pointsampler_splat(p, mf_mul(w, mf_mul(estimator, SPLAT_COUNT_CORRECTOR)));
+  }
 }
 
 // Perform Resampled Importance Sampling (streaming RIS)
@@ -98,6 +123,7 @@ static void ris(pixel_t q, reservoir_t *r) {
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
+  r->envmap = 0;
 
   for(int i = 0; i < M; i++) {
     path_t path;
@@ -107,10 +133,8 @@ static void ris(pixel_t q, reservoir_t *r) {
     if(path_extend(&path)) break;
 
     if(path.v[path.length-1].flags & s_environment) {
-      // give reservoir non-zero confidence to serve as indicator
-      r->c = 1;
-      path_copy(r->path, &path);
-      break;
+      // indicator
+      r->envmap = 1;
     }
     
     // generate path tree
@@ -118,12 +142,21 @@ static void ris(pixel_t q, reservoir_t *r) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      double phat = p_hat(&path);
-      double pdf = md(path_pdf(&path), 0); // hero wavelength pdf
-      if(phat > 0. && pdf > 0.)
-        update(r, &path, phat/pdf, 1.); // mis weight is 1 for samples of same path tree because each sample has a different length
+      // use cached value instead of calculating then seperately
+      double hero_throughput = mf_hsum(path.throughput);
+      if(hero_throughput > 0.) {
+        // w = mis * phat * 1/pdf
+        // - mis weight is 1 for samples of same path tree (cuz each sample diff length)
+        // - cached throughput is f / pdf 
+        // - we use phat := hsum(f)
+        update(r, &path, hero_throughput, 1.);
+      }
       else
         r->c += 1.;
+      
+      // splat sample anyway
+      splat(&path, path.throughput);
+      
       path_pop(&path);
       
       // extend path
@@ -287,27 +320,53 @@ static void combine(pixel_t qs, reservoir_t *s, pixel_t qr[], reservoir_t *r[]) 
 #endif
 
 #if TEMPORAL_REUSE
+float shift_lambda(path_t *path) {
+  if(is_null(path)) return 0.0;
+
+  const float range = spectrum_sample_max - spectrum_sample_min;
+
+  // shift lambdas with offset and wrap around the wavelengths that exceed spectrum_sample_max
+  mf_t new_lambda = mf_add(path->lambda, mf_set1(LAMBDA_OFFSET));
+  mf_t mask = mf_gt(new_lambda, mf_set1(spectrum_sample_max));
+  new_lambda = mf_select(mf_sub(new_lambda, mf_set1(range)), new_lambda, mask);
+
+  float J = path_shift_lambda(path, new_lambda);
+
+  if(J == 0.0) set_null(path);
+
+  return J;
+}
+
 // Combine reservoir s with r.
 // Assumes s and r come from the same domain (pixel)
+// Spectral shifts the sample in s.
 static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
   // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
-  if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
+  if(s == r) { printf("tried to combine reservoir with itself (temporal)\n"); return; } 
 
   // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
-  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
+  if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs (temporal)\n"); return; }
   
-  // Shift lambda of r, should be deterministic
-  
-  r->path->lambda = spectrum_sample_lambda(pointsampler(r->path, s_dim_lambda), NULL);
+  // Shift lambda of s, should be deterministic
+  float Js = shift_lambda(s->path);
 
   // MIS weights
-  double total = (s->c + r->c);
-  double mis_s = s->c / total;
-  double mis_r = r->c / total;
+  double cphats = s->c * p_hat(s->path) * Js;
+  double cphatr = r->c * p_hat(r->path);
+  double total = cphats + cphatr;
+
+  if(total == 0) {
+    // fast exit
+    s->c += r->c;
+    return;
+  }
+
+  double mis_s = cphats / total;
+  double mis_r = cphatr / total;
   
   // resampling weights
-  md_t w_r = mis_r * p_hat(r->path) * r->W;
-  md_t w_s = mis_s * p_hat(s->path) * s->W;
+  double w_r = mis_r * p_hat(r->path) * r->W;
+  double w_s = mis_s * p_hat(s->path) * s->W;
 
   // combine reservoirs in s
   s->w_sum = w_s;
@@ -442,6 +501,7 @@ sampler_t *sampler_init() {
       r->w_sum = 0.;
       r->c = 0.;
       r->W = 0.;
+      r->envmap = 0;
     }
   }
 
@@ -480,9 +540,14 @@ void sampler_prepare_sample(uint64_t index) {
   new.path = (path_t *)malloc(sizeof(path_t));
   // Intial RIS
   ris(q, &new);
-  // combine with temporal neighbour (previous reservoir)
-  combine_temporal(r, &new);
+
+  if(new.envmap)
+    r->envmap = 1; 
+  else // combine with temporal neighbour (previous reservoir)
+    combine_temporal(r, &new);
+
   free(new.path);
+  
   #else
   // Intial RIS
   ris(q, r);
@@ -496,8 +561,7 @@ void sampler_pass_sample(uint64_t index) {
   get_pixel(index, &q);
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
-  // check for env map hit
-  if(not_null(r->path) && r->path->v[r->path->length-1].flags & s_environment) return;
+  if(r->envmap) return;
 
   // Spatial re-use pass
   reservoir_t *ns[NEIGHBOUR_COUNT];
@@ -510,20 +574,15 @@ void sampler_pass_sample(uint64_t index) {
   #else
   combine(q, r, qns, ns);
   #endif
+
+  // splat sample anyway
+  if(is_null(r->path) || r->envmap) return;
+  mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
+  splat(r->path, estimator);
 }
 
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
-
-static inline mf_t path_pdf_hero(const path_t *p)
-{
-  // this is just the hero wavelength weight:
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
 
 void sampler_create_path(path_t *path)
 {
@@ -532,13 +591,11 @@ void sampler_create_path(path_t *path)
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
   // don't splat null sample
-  if(is_null(r->path)) return;
+  if(is_null(r->path) || r->envmap) return;
 
   // estimator f(r.Y) * r.W
-  const md_t estimator = md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W));
-  const mf_t w = path_pdf_hero(r->path);
-
-  pointsampler_splat(r->path, mf_mul(w, md_2f(estimator)));
+  const mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
+  splat(r->path, estimator);
 }
 
 void sampler_print_info(FILE *fd)

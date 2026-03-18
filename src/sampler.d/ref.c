@@ -29,8 +29,21 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static void get_pixel_linear(uint64_t index, uint64_t *i, uint64_t *j, float *_i, float *_j) {
-  pointsampler_pixel_linear(index, i, j, _i, _j);
+static inline mf_t sampler_mis(const path_t *p)
+{
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
+
+static inline mf_t new_lambda(path_t *path) {
+  float lf[MF_COUNT];
+  mf_t lambda_pdf;
+    for(int l=0;l<MF_COUNT;l++)
+      lf[l] = fmodf(pointsampler(path, s_dim_lambda) + l/(float)MF_COUNT, 1.0f);
+  return spectrum_sample_lambda(mf_loadu(lf), &lambda_pdf);
 }
 
 void sampler_create_path(path_t *path)
@@ -38,14 +51,15 @@ void sampler_create_path(path_t *path)
   // extend path once to determine pixel on camera and first vertex
   if(path_extend(path)) return;
 
-  const int max_length = 10;
-  while(path->length < max_length) {
+  while(1) {
     // sample light source
     if(nee_sample(path)) break;
 
     // path.throughput == p_hat/pdf
-    if(mf_any(mf_gt(path->throughput, mf_set1(0.0))))
-      pointsampler_splat(path, path->throughput);
+    if(mf_any(mf_gt(path->throughput, mf_set1(0.0)))) {
+      const mf_t w = sampler_mis(path);
+      pointsampler_splat(path, mf_mul(w, path->throughput));
+    }
     path_pop(path);
 
     // extend path
