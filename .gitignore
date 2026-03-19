@@ -1,3 +1,7 @@
+basic_scenes/*/*.txt
+basic_scenes/*/*.png
+basic_scenes/*/*.pfm
+basic_scenes/*/renders/*
 regression/*.res
 regression/report.html
 regression/*/testrender_fb00.pfm
