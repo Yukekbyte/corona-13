@@ -73,4 +73,4 @@ mult 2 9 20 0 # 21 board
 21 geo/knight_g8
 21 geo/rook_h8
 16 geo/sidepanel
-16 backpanel
+16 geo/backpanel
