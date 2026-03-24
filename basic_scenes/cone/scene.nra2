@@ -1,0 +1,20 @@
+black
+
+10
+
+diffuse # 0
+color d 0.7000 0.7000 0.7000 # 1
+mult 1 1 0 # 2
+diffuse # 3
+color d 0.7000 0.7000 0.7000 # 4
+mult 1 4 0 # 5
+diffuse # 6
+color d 0.7000 0.7000 0.7000 # 7
+color e 300.000 300.000 300.000 1. # 8
+mult 2 7 8 0 # 9
+
+4
+2 Cuber
+5 Coner
+9 Planer
+9 central_light

@@ -517,62 +517,165 @@ float path_shift_lambda(path_t *path, mf_t lambda) {
   return md(new_pdf, 0) / md(old_pdf, 0);
 }
 
-float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end) {
-  assert(source_path->length > end);
+void print_vertex_scattermode(vertex_scattermode_t mode) {
+    char buffer[256] = "";  // Buffer to hold the output
+    int first = 1;  // To handle comma formatting
+
+    if (mode == s_absorb) {
+        printf("s_absorb\n");
+        return;
+    }
+
+    // Append modes to the buffer based on set flags
+    if (mode & s_reflect) {
+        strcat(buffer, first ? "s_reflect" : ", s_reflect");
+        first = 0;
+    }
+    if (mode & s_transmit) {
+        strcat(buffer, first ? "s_transmit" : ", s_transmit");
+        first = 0;
+    }
+    if (mode & s_volume) {
+        strcat(buffer, first ? "s_volume" : ", s_volume");
+        first = 0;
+    }
+    if (mode & s_fiber) {
+        strcat(buffer, first ? "s_fiber" : ", s_fiber");
+        first = 0;
+    }
+    if (mode & s_emit) {
+        strcat(buffer, first ? "s_emit" : ", s_emit");
+        first = 0;
+    }
+    if (mode & s_sensor) {
+        strcat(buffer, first ? "s_sensor" : ", s_sensor");
+        first = 0;
+    }
+    if (mode & s_diffuse) {
+        strcat(buffer, first ? "s_diffuse" : ", s_diffuse");
+        first = 0;
+    }
+    if (mode & s_glossy) {
+        strcat(buffer, first ? "s_glossy" : ", s_glossy");
+        first = 0;
+    }
+    if (mode & s_specular) {
+        strcat(buffer, first ? "s_specular" : ", s_specular");
+        first = 0;
+    }
+
+    printf("%s\n", buffer);  // Print the final string
+}
+
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path) {
+  assert(source_path->length > 2);
 
   *shifted = *source_path;
   shifted->sensor.pixel_i = pixel_i;
   shifted->sensor.pixel_j = pixel_j;
   shifted->sensor.pixel_set = 1;
 
-  // support for defocusing?
-  //shifted->sensor.aperture_x = source_path->sensor.aperture_x;
-  //shifted->sensor.aperture_y = source_path->sensor.aperture_y;
-  //shifted->sensor.aperture_set = 1;
 
-  // shifting lambda would need to re-eval the rest of the source path too
-  shifted->lambda = source_path->lambda; // needed line? isn't it already copied?
-  shifted->time = source_path->time;
-  
   shader_exterior_medium(shifted);
-  mf_t cam = view_cam_sample(shifted);
+  mf_t cam = view_cam_sample(shifted); // sets e[1].omega
   if(mf_all(mf_lte(cam, mf_set1(0.0f)))) 
     return 0.0; // camera ray failed
 
-  for(int v = 1; v <= end; v++) {
-    shifted->v[v].mode = source_path->v[v].mode;
-    shifted->e[v].transmittance = mf_set1(0.0f);
-    if(path_propagate(shifted, v, s_propagate_mutate)) 
-      return 0.0; // propagation failed
+  int v = 0;
+  float J = 1;
+
+  if(path_propagate(shifted, v+1, s_propagate_mutate)) 
+    return 0.0; // propagation failed
+  v++;
+
+  if(shifted->v[v].mode != source_path->v[v].mode) return 0.0;
+
+  while(!(shifted->v[v].mode & s_diffuse 
+          && source_path->v[v].mode & s_diffuse
+          && source_path->v[v+1].mode & s_diffuse)) { // or s_emit!
+
+    // part below doesn't work yet
+    return 0.0f;
+
+    if(v+1 == source_path->length) {
+      // no consecutive rough vertices...
+      return 0.0;
+    }
+
+    // random replay
+    float rx, ry, r_mode;
+
+    if(shifted->v[v].mode & s_specular) {
+      // for specular bounces, omega is deterministic, so random numbers don't matter...
+      rx = pointsampler(shifted, s_dim_omega_x);
+      ry = pointsampler(shifted, s_dim_omega_y);
+      r_mode = pointsampler(shifted, s_dim_scatter_mode);
+    } 
+    else {
+      rx = source_path->v[v].rands.omega_x;
+      ry = source_path->v[v].rands.omega_y;
+      r_mode = source_path->v[v].rands.scatter_mode;
+      
+      if(rx == 0.0 && ry == 0.0 && r_mode == 0.0) {
+        printf("Shader doesn't support random replay\n");
+        //print_vertex_scattermode(source_path->v[v].mode);
+        return 0.0; // shader doesn't store random numbers:(
+      }
+    }
+
+    pointsampler_enable_fake_random(rt.pointsampler);
+    pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_x, rx);
+    pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_y, ry);
+    pointsampler_set_fake_random(rt.pointsampler, s_dim_scatter_mode, r_mode);
+    
+    int original_length = shifted->length;
+    shifted->length = v+1;
+    shader_sample(shifted); 
+    shifted->length = original_length;
+    
+    pointsampler_disable_fake_random(rt.pointsampler);
+
+    if(!(shifted->v[v].mode & s_specular)) {
+      if(shifted->v[v].rands.omega_x != rx) {
+        printf("shifted->v[%d] rx %f, ry %f, r_mode %f | rands.omega_x %f, omega_y %f, scatter_mode %f\n", v, rx, ry, r_mode, shifted->v[v].rands.omega_x, shifted->v[v].rands.omega_y, shifted->v[v].rands.scatter_mode);
+       }
+    }
+    
+    // In a pure random replay shift, the Jacobian is the ratio of PDFs
+    float pdf_source = mf(shader_pdf(source_path, v), 0);
+    float pdf_shifted = mf(shader_pdf(shifted, v), 0);
+    if(pdf_shifted <= 0.0f) return 0.0f;
+    //printf("pdf_source %f, pdf_shifted %f | source / shifted %f\n", pdf_source, pdf_shifted, pdf_source / pdf_shifted);
+    J *= (pdf_source / pdf_shifted);
+    
+    path_propagate(shifted, v+1, s_propagate_mutate);
+    v++;
+
+    // specular vertex must stay specular, diffuse must stay diffuse
+    if(shifted->v[v].mode != source_path->v[v].mode) return 0.0;
   }
 
-  // project
-  shifted->v[end+1].mode = source_path->v[end+1].mode;
-  shifted->e[end+1].transmittance = mf_set1(0.0f);
+
+  // if(v > 1) {
+  //   printf("Did %d bounces before reconnecting with Jacobian up until that point = %f\n", v, J);
+  // }
   
-  if(path_project(shifted, end+1, s_propagate_mutate) ||
-      (shifted->v[end+1].flags           != source_path->v[end+1].flags) ||
-      (shifted->v[end+1].hit.shader      != source_path->v[end+1].hit.shader) ||
-      (shifted->v[end+1].interior.shader != source_path->v[end+1].interior.shader) ||
-      (primid_invalid(shifted->v[end+1].hit.prim) != primid_invalid(source_path->v[end+1].hit.prim))) {
+  // project to reconnect at next vertex
+  if(path_project(shifted, v+1, s_propagate_mutate) ||
+      (shifted->v[v+1].flags           != source_path->v[v+1].flags) ||
+      (shifted->v[v+1].hit.shader      != source_path->v[v+1].hit.shader) ||
+      (shifted->v[v+1].interior.shader != source_path->v[v+1].interior.shader) ||
+      (primid_invalid(shifted->v[v+1].hit.prim) != primid_invalid(source_path->v[v+1].hit.prim))) {
     return 0.0;
   }
 
-  // check whether we actually arrived at vertex v[end+1]
-  for(int k=0;k<3;k++)
-    if(fabsf(shifted->v[end+1].hit.x[k] - source_path->v[end+1].hit.x[k]) > 1e-3f *
-        MAX(MAX(fabsf(shifted->v[end+1].hit.x[k]), fabsf(source_path->v[end+1].hit.x[k])), 1.0))
-      return 0.0;
-  
-  // // check visibility
-  // if(!path_visible(shifted, end+1)) {
-  //   return 0.0;
-  // }
-
-  float shif = path_lambert(shifted, end, shifted->e[end].omega) / (shifted->e[end].dist * shifted->e[end].dist);
-  float sour = path_lambert(source_path, end, source_path->e[end].omega) / (source_path->e[end].dist * source_path->e[end].dist);
-  if(shif == 0.0f) return 0.0f;
-  return sour / shif;
+  float shif = path_lambert(shifted, v, shifted->e[v].omega) / (shifted->e[v].dist * shifted->e[v].dist);
+  float sour = path_lambert(source_path, v, source_path->e[v].omega) / (source_path->e[v].dist * source_path->e[v].dist);
+  // if(shif == 0.0f) return 0.0f;
+  // J *= (sour / shif);
+  if(sour == 0.0f) return 0.0f;
+  J *= shif / sour;
+  return J;
 }
 
 // connect two paths, extending path1 by a connection edge and the reverse of path2.

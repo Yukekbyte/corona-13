@@ -144,6 +144,14 @@ typedef struct vertex_manifold_t
 }
 vertex_manifold_t;
 
+typedef struct vertex_random_numbers_t
+{
+  float omega_x;
+  float omega_y;
+  float scatter_mode;
+} 
+vertex_random_numbers_t;
+
 typedef struct vertex_t
 {
   // geometric information
@@ -172,6 +180,7 @@ typedef struct vertex_t
   vertex_scattermode_t mode;            // reflect or transmit mode of /actually sampled or evaluated/ event.
   vertex_scattermode_t material_modes;  // potentially possible modes at this event, as far as material is concerned.
   vertex_scattermode_t culled_modes;    // light transport may choose to constrain material modes. affects pdf.
+  vertex_random_numbers_t rands;        // random numbers stored for random replay
 }
 vertex_t;
 
@@ -293,7 +302,7 @@ void path_reverse(path_t *path, const path_t *input);
 float path_shift_lambda(path_t *path, mf_t lambda);
 
 // create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
-float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end);
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path);
 
 // connect two paths, extending path1 by a connection edge and the reverse of path2.
 mf_t path_connect(path_t *path1, const path_t *path2);

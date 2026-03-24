@@ -23,11 +23,11 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 2
+#define SPATIAL_REUSE_PASSES 3
 #define SPLAT_COUNT_CORRECTOR mf_set1(1.0f/((float)(M + SPATIAL_REUSE_PASSES + 1)))
 #define TEMPORAL_REUSE 0
 
-// Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
+// Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR) 
 
 typedef struct sampler_t {
   reservoir_t **reservoirs;
@@ -130,20 +130,20 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     reservoir_t *n = &rt.sampler->reservoirs[qn->i][qn->j];
     
     // Check for geometric similarity (up to a point)
-    if(k <= 3*NEIGHBOUR_COUNT && k <= 0.5*MAX_ATTEMPTS) {
-      // angle between normals < 25 deg (0.435 rad) 
-      if(acosf(dotproduct(path->v[1].hit.n, n->path->v[1].hit.n)) > 0.436f) {
-        k++;
-        continue;
-      }
+    // if(k <= 3*NEIGHBOUR_COUNT && k <= 0.5*MAX_ATTEMPTS) {
+    //   // angle between normals < 25 deg (0.435 rad) 
+    //   if(acosf(dotproduct(path->v[1].hit.n, n->path->v[1].hit.n)) > 0.436f) {
+    //     k++;
+    //     continue;
+    //   }
     
-      // depth difference can't be more than 10 percent
-      float depthratio = path->e[1].dist / n->path->e[1].dist;
-      if(depthratio < 0.9f || 1.1f < depthratio) {
-        k++;
-        continue;
-      }
-    }
+    //   // depth difference can't be more than 10 percent
+    //   float depthratio = path->e[1].dist / n->path->e[1].dist;
+    //   if(depthratio < 0.9f || 1.1f < depthratio) {
+    //     k++;
+    //     continue;
+    //   }
+    // }
 
     pointsampler_subpixel(qn->i, qn->j, &qn->_i, &qn->_j);
 

@@ -60,6 +60,23 @@ float pointsampler(path_t *p, int dim)
   return points_rand(rt.points, tid);
 }
 
+float pointsampler_store(path_t *p, int v, int dim)
+{
+  // pure random mersenne twister
+  const int tid = common_get_threadid();
+  float r = points_rand(rt.points, tid);
+  if(dim & s_dim_omega_x)
+    p->v[v].rands.omega_x = r;
+  else if(dim & s_dim_omega_y)
+    p->v[v].rands.omega_y = r;
+  else if(dim & s_dim_scatter_mode)
+    p->v[v].rands.scatter_mode = r;
+  else
+    printf("Random number storage not supported for this dimension\n");
+
+  return r;
+}
+
 void pointsampler_pixel_linear(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j)
 {
   uint64_t width  = view_width();

@@ -4,7 +4,7 @@
 
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-#define PAIRWISE_COMBINE 0
+#define PAIRWISE_COMBINE 1
 #define LAMBDA_OFFSET 123.0f // is a float
 
 double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
