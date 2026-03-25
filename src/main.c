@@ -114,7 +114,7 @@ void onKeyDown(keycode_t key)
         }
         break;
        }
-    case KeyD:
+    case KeyV:
       {
         char filename_readable[265];
         for(int k=0;k<10;k++)
