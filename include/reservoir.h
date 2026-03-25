@@ -27,10 +27,9 @@ typedef struct pixel_t {
 
 // Updates reservoir with sample and weight.
 static void update(reservoir_t *r, path_t *path, double weight, double c) {
-  const int tid = common_get_threadid();
   r->w_sum += weight;
   r->c += c;
-  if (points_rand(rt.points, common_get_threadid()) * r->w_sum < weight) {
+  if (points_rand(rt.points, common_get_threadid()) * r->w_sum < weight)
     path_copy(r->path, path);
 }
 
