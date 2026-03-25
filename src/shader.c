@@ -166,8 +166,8 @@ mf_t sample_d(path_t *p, void *data)
 {
   const int v = p->length; // about to sample that vertex
 
-  const float x1 = pointsampler(p, s_dim_omega_x);
-  const float x2 = pointsampler(p, s_dim_omega_y);
+  const float x1 = pointsampler_store(p, p->length-1, s_dim_omega_x);
+  const float x2 = pointsampler_store(p, p->length-1, s_dim_omega_y);
   float s = sqrtf(x1);
   // light tracer samples geometric normal
   float *n = (p->v[0].mode & s_emit) ? p->v[v-1].hit.gn : p->v[v-1].hit.n;

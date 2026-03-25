@@ -3,7 +3,7 @@
 #include "pathspace.h"
 #include "points.h"
 
-#define M 8
+#define M 1
 #define CONFIDENCE_CAP 256. // is a double
 
 #define set_null(path) ((path)->length = -1)
@@ -27,10 +27,9 @@ typedef struct pixel_t {
 
 // Updates reservoir with sample and weight.
 static void update(reservoir_t *r, path_t *path, double weight, double c) {
-  const int tid = common_get_threadid();
   r->w_sum += weight;
   r->c += c;
-  if (points_rand(rt.points, common_get_threadid()) * r->w_sum < weight) {
+  if (points_rand(rt.points, common_get_threadid()) * r->w_sum < weight)
     path_copy(r->path, path);
 }
 
@@ -51,7 +50,7 @@ float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
     return 0.0;
   }
 
-  float J = path_shift(shifted, q._i, q._j, source_path, 1);
+  float J = path_shift(shifted, q._i, q._j, source_path);
   
   // check if shift failed
   if (J == 0.0f || p_hat(shifted) == 0.0f) {
