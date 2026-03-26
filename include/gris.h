@@ -4,8 +4,9 @@
 
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-#define PAIRWISE_COMBINE 0
+#define PAIRWISE_COMBINE 1
 #define LAMBDA_OFFSET 123.0f // is a float
+#define CONFIDENCE_CAP 256. // is a double
 
 double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
   if(is_null(y)) return 0.0;
@@ -16,6 +17,8 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
   double denom = num;
   for(int i = 0; i < NEIGHBOUR_COUNT; i++)
     denom += c[i] * p_hat_from(y, q[i]);
+
+  if(denom <= 0.) return 0.0; // normally p_hat(x) will be > 0, but occasionally p_hat can be unstable, so this prevents nan's in outlier cases.
 
   return num / denom;
 }
@@ -35,21 +38,27 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
     double mis_s;
     float Jr = shift(&r_path_from_qs, qs, r->path);
     float Js = shift(&s_path_from_qr, qr, s->path);
+    double phat_s = p_hat(s->path);
+    double phat_r = p_hat(r->path);
+    double phat_r_from_s = p_hat(&r_path_from_qs);
+    double phat_s_from_r = p_hat(&s_path_from_qr);
 
     // MIS weights
-    if(is_null(s->path))
+    // > normally phat_s > 0. when not null (a sample can only be held if phat > 0...),
+    //   but phat can occasionally evaluate to a different value as before, so to not get nan's, we also check phat_r/s <= 0.
+    if(is_null(s->path) || phat_s <= 0.)
       mis_s = 0.0f;
     else
-      mis_s = s->c * p_hat(s->path) / (s->c * p_hat(s->path) + r->c * p_hat(&s_path_from_qr) * Js);
+      mis_s = s->c * phat_s / (s->c * phat_s + r->c * phat_s_from_r * Js);
     
-    if(is_null(r->path))
+    if(is_null(r->path) || phat_r <= 0.)
       mis_r = 0.0f;
     else
-      mis_r = r->c * p_hat(r->path) / (r->c * p_hat(r->path) + s->c * p_hat(&r_path_from_qs) * Jr);
+      mis_r = r->c * phat_r / (r->c * phat_r + s->c * phat_r_from_s * Jr);
     
     // resampling weights
-    double w_r = mis_r * p_hat(&r_path_from_qs) * r->W * Jr;
-    double w_s = mis_s * p_hat(s->path) * s->W;
+    double w_r = mis_r * phat_r_from_s * r->W * Jr;
+    double w_s = mis_s * phat_s        * s->W;
 
     // combine reservoirs in s
     s->w_sum = w_s;
