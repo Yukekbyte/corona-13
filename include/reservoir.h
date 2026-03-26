@@ -4,10 +4,6 @@
 #include "points.h"
 
 #define M 32
-<<<<<<< HEAD
-#define CONFIDENCE_CAP 256. // is a double
-=======
->>>>>>> 158c324ca412c785e30b016a2800b9c679b4e528
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
