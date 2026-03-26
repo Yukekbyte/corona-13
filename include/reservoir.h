@@ -3,7 +3,7 @@
 #include "pathspace.h"
 #include "points.h"
 
-#define M 1
+#define M 32
 #define CONFIDENCE_CAP 256. // is a double
 
 #define set_null(path) ((path)->length = -1)
