@@ -4,7 +4,10 @@
 #include "points.h"
 
 #define M 32
+<<<<<<< HEAD
 #define CONFIDENCE_CAP 256. // is a double
+=======
+>>>>>>> 158c324ca412c785e30b016a2800b9c679b4e528
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
@@ -102,15 +105,20 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      // use cached value instead of calculating then seperately
-      double hero_throughput = mf_hsum(path.throughput);
-      if(hero_throughput > 0.) {
-        // w = mis * phat * 1/pdf
-        // - mis weight is 1 for samples of same path tree (cuz each sample diff length)
-        // - cached throughput is f / pdf 
-        // - we use phat := hsum(f)
-        update(r, &path, hero_throughput, 1.);
-      }
+      // Cached value is flawed... differences give black spot artifacts
+      // // use cached value instead of calculating then seperately
+      // double hero_throughput = mf_hsum(path.throughput);
+      // if(hero_throughput > 0.) {
+      //   // w = mis * phat * 1/pdf
+      //   // - mis weight is 1 for samples of same path tree (cuz each sample diff length)
+      //   // - cached throughput is f / pdf 
+      //   // - we use phat := hsum(f)
+      //   update(r, &path, hero_throughput, 1.);
+      // }
+      double phat = p_hat(&path);
+      double pdf = md(path_pdf(&path), 0);
+      if(phat > 0. && pdf > 0.)
+        update(r, &path, phat/pdf, 1.);
       else
         r->c += 1.;
       
