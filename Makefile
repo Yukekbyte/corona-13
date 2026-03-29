@@ -72,7 +72,9 @@ STATIC_HEADERS=\
     include/pathspace/equiangular.h\
     include/pathspace/tech.h\
     include/screenshot.h\
-    include/lights.h
+    include/lights.h\
+    include/gris.h\
+    include/reservoir.h
 
 STATIC_SOURCES=\
     src/corona_common.c\

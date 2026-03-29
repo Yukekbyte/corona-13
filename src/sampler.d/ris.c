@@ -48,11 +48,11 @@ static inline mf_t path_pdf_hero(const path_t *p)
 }
 
 static inline void splat(path_t *p, mf_t estimator) {
-  // if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
-  //   const mf_t w = path_pdf_hero(p);
-  //   //pointsampler_splat(p, mf_mul(w, estimator));
-  //   pointsampler_splat(p, mf_mul(w, mf_mul(estimator, mf_set1(1/(M+1)))));
-  // }
+  if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
+    const mf_t w = path_pdf_hero(p);
+    //pointsampler_splat(p, mf_mul(w, estimator));
+    pointsampler_splat(p, mf_mul(w, mf_mul(estimator, mf_set1(1./(M+1.)))));
+  }
 }
 
 void sampler_create_path(path_t *path)
@@ -66,7 +66,7 @@ void sampler_create_path(path_t *path)
   get_pixel_linear(path->index, &q);
   
   // // inital candidate generation
-  ris(q, &r, splat);
+  ris(q, &r, NULL);
 
   // don't splat null sample
   if(is_null(r.path) || r.envmap) return;

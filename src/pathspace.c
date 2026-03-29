@@ -551,9 +551,8 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
           && source_path->v[v].mode & s_diffuse
           && source_path->v[v+1].mode & (s_diffuse | s_emit))) { // or s_emit!
 
-
     // part below doesn't work yet
-    //return 0.0f;
+    return 0.0f;
 
     if(v+1 == source_path->length) {
       // no consecutive rough vertices...
@@ -566,9 +565,9 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
 
     if(shifted->v[v].mode & s_specular) {
       // for specular bounces, omega is deterministic, so random numbers don't matter...
-      // rx = pointsampler(shifted, s_dim_omega_x);
-      // ry = pointsampler(shifted, s_dim_omega_y);
-      // r_mode = pointsampler(shifted, s_dim_scatter_mode);
+      rx = pointsampler(shifted, s_dim_omega_x);
+      ry = pointsampler(shifted, s_dim_omega_y);
+      r_mode = pointsampler(shifted, s_dim_scatter_mode);
     } 
     else {
       rx = source_path->v[v].rands.omega_x;
@@ -625,12 +624,14 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     return 0.0;
   }
 
+  //v++;
+
   float shif = path_lambert(shifted, v, shifted->e[v].omega) / (shifted->e[v].dist * shifted->e[v].dist);
   float sour = path_lambert(source_path, v, source_path->e[v].omega) / (source_path->e[v].dist * source_path->e[v].dist);
-  // if(shif == 0.0f) return 0.0f;
-  // J *= (sour / shif);
-  if(sour == 0.0f) return 0.0f;
-  J *= shif / sour;
+  if(shif == 0.0f) return 0.0f;
+  J *= (sour / shif);
+  // if(sour == 0.0f) return 0.0f;
+  // J *= shif / sour;
   return J;
 }
 

@@ -3,7 +3,7 @@
 #include "pathspace.h"
 #include "points.h"
 
-#define M 32
+#define M 8
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
@@ -43,35 +43,6 @@ static double p_hat(path_t *path) {
   return md_hsum(f);
 }
 
-float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
-  if(is_null(source_path)) {
-    set_null(shifted);
-    return 0.0;
-  }
-
-  float J = path_shift(shifted, q._i, q._j, source_path);
-  
-  // check if shift failed
-  if (J == 0.0f || p_hat(shifted) == 0.0f) {
-    set_null(shifted);
-    return 0.0;
-  }
-
-  return J;
-}
-
-double p_hat_from(path_t *y, pixel_t q) {
-  path_t x;
-  float J = shift(&x, q, y);
-  if(not_null(&x))
-    return p_hat(&x) * J;
-  return 0;
-}
-
-double p_hat_from_opt(path_t *x, float J) {
-  return p_hat(x) / J;
-}
-
 typedef void (*splat_fn)(path_t*, mf_t);
 
 // Perform Resampled Importance Sampling (streaming RIS)
@@ -91,18 +62,16 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     
     if(path_extend(&path)) break;
 
-    if(path.v[path.length-1].flags & s_environment) {
-      // indicator
-      r->envmap = 1;
-    }
+    if(path.v[path.length-1].flags & s_environment) 
+      r->envmap = 1; // indicator
     
     // generate path tree
     while(1) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      // Cached value is flawed... differences give black spot artifacts
-      // // use cached value instead of calculating then seperately
+      // Cached value is flawed, not always the same...
+      // use cached value instead of calculating then seperately
       // double hero_throughput = mf_hsum(path.throughput);
       // if(hero_throughput > 0.) {
       //   // w = mis * phat * 1/pdf

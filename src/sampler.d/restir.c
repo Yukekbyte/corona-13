@@ -23,7 +23,7 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 2
+#define SPATIAL_REUSE_PASSES 3
 #define SPLAT_COUNT_CORRECTOR mf_set1(1.0f/((float)(M + SPATIAL_REUSE_PASSES + 1)))
 #define TEMPORAL_REUSE 0
 
@@ -51,7 +51,7 @@ static inline mf_t path_pdf_hero(const path_t *p)
   md_t pdf = md_set1(1.0);
   for(int v=1;v<p->length;v++)
     pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
+    
   return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
 }
 
@@ -222,7 +222,7 @@ void sampler_prepare_sample(uint64_t index) {
     path_t path;
     new.path = &path;
     // Intial RIS
-    ris(q, &new, splat);
+    ris(q, &new, NULL);
 
     if(new.envmap)
       r->envmap = 1; 
@@ -231,7 +231,7 @@ void sampler_prepare_sample(uint64_t index) {
 
   #else
     // Intial RIS
-    ris(q, r, splat);
+    ris(q, r, NULL);
   #endif
 }
 
@@ -257,9 +257,9 @@ void sampler_pass_sample(uint64_t index) {
   #endif
 
   // splat sample anyway
-  if(is_null(r->path) || r->envmap) return;
-  mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
-  splat(r->path, estimator);
+  // if(is_null(r->path) || r->envmap) return;
+  // mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
+  // splat(r->path, estimator);
 }
 
 void sampler_prepare_frame(sampler_t *s) {}
@@ -276,7 +276,12 @@ void sampler_create_path(path_t *path)
 
   // estimator f(r.Y) * r.W
   const mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
-  splat(r->path, estimator);
+  //splat(r->path, estimator);
+  if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
+    const mf_t w = path_pdf_hero(r->path);
+    //pointsampler_splat(p, mf_mul(w, estimator));
+    pointsampler_splat(r->path, mf_mul(w, estimator));
+  }
 }
 
 void sampler_print_info(FILE *fd)

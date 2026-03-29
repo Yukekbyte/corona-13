@@ -8,17 +8,47 @@
 #define LAMBDA_OFFSET 123.0f // is a float
 #define CONFIDENCE_CAP 256. // is a double
 
+float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
+  if(is_null(source_path)) {
+    set_null(shifted);
+    return 0.0;
+  }
+
+  float J = path_shift(shifted, q._i, q._j, source_path);
+  
+  // check if shift failed
+  if (J == 0.0f || p_hat(shifted) == 0.0f) {
+    set_null(shifted);
+    return 0.0;
+  }
+
+  return J;
+}
+
+double p_hat_from(path_t *y, pixel_t q) {
+  path_t x;
+  float J = shift(&x, q, y);
+  if(J > 0.)
+    return p_hat(&x) * J;
+  return 0.0;
+}
+
+double p_hat_from_opt(path_t *x, float J) {
+  return p_hat(x) / J;
+}
+
 double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
   if(is_null(y)) return 0.0;
   
   double num = cy * p_hat_from_opt(x, J);
   if(num <= 0.0) return 0.0;
+  assert(num > 0.);
   
   double denom = num;
   for(int i = 0; i < NEIGHBOUR_COUNT; i++)
     denom += c[i] * p_hat_from(y, q[i]);
 
-  if(denom <= 0.) return 0.0; // normally p_hat(x) will be > 0, but occasionally p_hat can be unstable, so this prevents nan's in outlier cases.
+  if(denom <= 0.) return 0.0; // p_hat(x) should be > 0, but occasionally p_hat can be unstable, so this prevents nan's in outlier cases.
 
   return num / denom;
 }
@@ -93,6 +123,32 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
       J[i] = shift(&Y[i], qs, r[i]->path);
       c[i] = r[i]->c;
     }
+
+    // Interlude
+    path_t r_path_from_qs;
+    path_t s_path_from_qr;
+    double mis_r;
+    double mis_s;
+    float Jr = shift(&r_path_from_qs, qs, r[0]->path);
+    float Js = shift(&s_path_from_qr, qr[0], s->path);
+    double phat_s = p_hat(s->path);
+    double phat_r = p_hat(r[0]->path);
+    double phat_r_from_s = p_hat(&r_path_from_qs);
+    double phat_s_from_r = p_hat(&s_path_from_qr);
+
+    // MIS weights
+    // > normally phat_s > 0. when not null (a sample can only be held if phat > 0...),
+    //   but phat can occasionally evaluate to a different value as before, so to not get nan's, we also check phat_r/s <= 0.
+    if(is_null(s->path) || phat_s <= 0.)
+      mis_s = 0.0f;
+    else
+      mis_s = s->c * phat_s / (s->c * phat_s + r[0]->c * phat_s_from_r * Js);
+    
+    if(is_null(r[0]->path) || phat_r <= 0.)
+      mis_r = 0.0f;
+    else
+      mis_r = r[0]->c * phat_r / (r[0]->c * phat_r + s->c * phat_r_from_s * Jr);
+    // end Interlude
 
     // MIS weights
     m_s = mis(s->path, s->path, 1.0f, s->c, qr, c);
