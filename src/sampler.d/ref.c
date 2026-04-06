@@ -56,15 +56,31 @@ void sampler_create_path(path_t *path)
     if(nee_sample(path)) break;
 
     // path.throughput == p_hat/pdf
-    if(mf_any(mf_gt(path->throughput, mf_set1(0.0)))) {
-      const mf_t w = sampler_mis(path);
-      pointsampler_splat(path, mf_mul(w, path->throughput));
-    }
+    md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
+    md_t pdf = path_pdf(path);
+    //mf_t throughput = sampler_throughput(path); //md_2f(md_div(contr, pdf));
+    //if(mf_any(mf_gt(path->throughput, mf_set1(0.0)))) {
+    const mf_t w = sampler_mis(path);
+    const mf_t p = mf_div(md_2f(pdf), w);
+    pointsampler_splat(path, mf_div(md_2f(measurement), p));
+    //}
     path_pop(path);
 
     // extend path
     if(path_extend(path)) break;
   }
+}
+
+mf_t sampler_throughput(path_t *path)
+{
+  if(path->length < 1) return mf_set1(0.0f);
+  const md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
+  if(mf_all(mf_lte(md_2f(measurement), mf_set1(0.0f))))
+    return mf_set1(0.0f);
+  md_t pdf = md_set1(1.0);
+  for(int k=0;k<path->length;k++)
+    pdf = md_mul(pdf, mf_2d(path_pdf_extend(path, k)));
+  return md_2f(md_div(measurement, pdf));
 }
 
 md_t sampler_sum_pdf_dwp(path_t *p)

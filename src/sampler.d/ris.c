@@ -37,21 +37,9 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static inline mf_t path_pdf_hero(const path_t *p)
-{
-  // this is just the hero wavelength weight:
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
-
 static inline void splat(path_t *p, mf_t estimator) {
   if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
-    const mf_t w = path_pdf_hero(p);
-    //pointsampler_splat(p, mf_mul(w, estimator));
-    pointsampler_splat(p, mf_mul(w, mf_mul(estimator, mf_set1(1./(M+1.)))));
+    pointsampler_splat(p, mf_mul(estimator, mf_set1(1./(M+1.))));
   }
 }
 
@@ -68,17 +56,14 @@ void sampler_create_path(path_t *path)
   // // inital candidate generation
   ris(q, &r, NULL);
 
-  // don't splat null sample
+  // don't splat null sample and don't support envmaps
   if(is_null(r.path) || r.envmap) return;
 
   // estimator f(r.Y) * r.W
   const mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r.path, 0, r.path->length-1), md_set1(r.W)));
   if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
-    const mf_t w = path_pdf_hero(r.path);
-    //pointsampler_splat(p, mf_mul(w, estimator));
-    pointsampler_splat(r.path, mf_mul(w, estimator));
+    pointsampler_splat(r.path, estimator);
   }
-  // const mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r.path, 0, r.path->length-1), md_set1(r.W)));
   // splat(r.path, estimator);
 }
 

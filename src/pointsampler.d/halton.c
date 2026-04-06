@@ -83,6 +83,10 @@ float pointsampler(path_t *p, int i)
     return halton_sample(&rt.pointsampler->h, dim, p->index);
 }
 
+float pointsampler_store(path_t *p, int v, int dim) {
+  return pointsampler(p, dim); // don't support it
+}
+
 void pointsampler_splat(path_t *p, mf_t value)
 {
   render_splat(p, value);

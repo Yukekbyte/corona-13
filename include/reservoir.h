@@ -37,10 +37,16 @@ static double p_hat(path_t *path) {
   if(is_null(path))
     return 0.0;
   md_t f = path_measurement_contribution_dx(path, 0, path->length-1);
-  //static const double w_arr[8] = { 0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2 };
-  //md_t w = md_loadu(w_arr);
-  //return md_hsum(md_mul(f, w));
   return md_hsum(f);
+}
+
+static inline mf_t sampler_mis(const path_t *p) 
+{
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
 }
 
 typedef void (*splat_fn)(path_t*, mf_t);
@@ -57,7 +63,11 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
 
   for(int i = 0; i < M; i++) {
     path_t path;
-    path_init(&path, 0, 0);
+
+    // random path index (32 bit suffices (instead of 64)), needed for different lambda sampling
+    uint32_t index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
+    
+    path_init(&path, index, 0);
     path_set_pixel(&path, q._i, q._j);
     
     if(path_extend(&path)) break;
@@ -71,7 +81,7 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
       // Cached value is flawed, not always the same...
-      // use cached value instead of calculating then seperately
+      // use cached value instead of calculating explicitly
       // double hero_throughput = mf_hsum(path.throughput);
       // if(hero_throughput > 0.) {
       //   // w = mis * phat * 1/pdf
@@ -82,13 +92,15 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
       // }
       double phat = p_hat(&path);
       double pdf = md(path_pdf(&path), 0);
+      mf_t mis = sampler_mis(&path); // Hero MIS, don't confuse this with the resampling weight MIS (which is 1)!
+      double hero = mf(mis, 0); // cast to double
       if(phat > 0. && pdf > 0.)
-        update(r, &path, phat/pdf, 1.);
+        update(r, &path, hero * phat/pdf, 1.); // pdf /= hero <=> 1/pdf *= hero
       else
         r->c += 1.;
       
       // splat sample anyway
-      if(splat_cb) splat_cb(&path, path.throughput);
+      if(splat_cb) splat_cb(&path, mf_mul(path.throughput, mis));
       
       path_pop(&path);
       

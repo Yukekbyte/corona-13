@@ -53,10 +53,19 @@ pointsampler_t *pointsampler_init(uint64_t frame)
 
 float pointsampler(path_t *p, int dim)
 {
-  // pure random mersenne twister
   const int tid = common_get_threadid();
   if(rt.pointsampler->rand[tid].enabled)
-    return rt.pointsampler->rand[tid].rand[dim];
+  return rt.pointsampler->rand[tid].rand[dim];
+  
+  if(dim & s_dim_lambda) {
+    int v = p->length;
+    const int end = p->v[v].rand_beg;
+    const int d = end + dim;
+    if(d < halton_get_num_dimensions())
+      return halton_sample(&rt.pointsampler->h, d, p->index);
+  }
+  
+  // pure random mersenne twister
   return points_rand(rt.points, tid);
 }
 

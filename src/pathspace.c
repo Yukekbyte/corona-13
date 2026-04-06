@@ -539,14 +539,6 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
 
   if(shifted->v[v].mode != source_path->v[v].mode) return 0.0;
 
-  for(int i = 1; i < source_path->length; i++) {
-    if(source_path->v[i].hit.shader < 0) {
-
-      printf("Even Source Path shader v[%d]: %d\n", i, source_path->v[i].hit.shader);
-      return 0.0;
-    }
-  }
-
   while(!(shifted->v[v].mode & s_diffuse 
           && source_path->v[v].mode & s_diffuse
           && source_path->v[v+1].mode & (s_diffuse | s_emit))) { // or s_emit!
@@ -624,14 +616,14 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     return 0.0;
   }
 
-  //v++;
+  v++;
 
   float shif = path_lambert(shifted, v, shifted->e[v].omega) / (shifted->e[v].dist * shifted->e[v].dist);
   float sour = path_lambert(source_path, v, source_path->e[v].omega) / (source_path->e[v].dist * source_path->e[v].dist);
-  if(shif == 0.0f) return 0.0f;
-  J *= (sour / shif);
-  // if(sour == 0.0f) return 0.0f;
-  // J *= shif / sour;
+  // if(shif == 0.0f) return 0.0f;
+  // J *= (sour / shif);
+  if(sour == 0.0f) return 0.0f;
+  J *= shif / sour;
   return J;
 }
 
