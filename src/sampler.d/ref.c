@@ -20,6 +20,7 @@
 #include "sampler.h"
 #include "spectrum.h"
 #include "pointsampler.h"
+#include "reservoir.h"
 
 
 typedef struct sampler_t {} sampler_t;
@@ -29,44 +30,36 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static inline mf_t sampler_mis(const path_t *p)
-{
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
-
-static inline mf_t new_lambda(path_t *path) {
-  float lf[MF_COUNT];
-  mf_t lambda_pdf;
-    for(int l=0;l<MF_COUNT;l++)
-      lf[l] = fmodf(pointsampler(path, s_dim_lambda) + l/(float)MF_COUNT, 1.0f);
-  return spectrum_sample_lambda(mf_loadu(lf), &lambda_pdf);
+static void get_pixel_linear(const uint64_t index, pixel_t *q) {
+  pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
 }
 
 void sampler_create_path(path_t *path)
-{  
-  // extend path once to determine pixel on camera and first vertex
+{
+  pixel_t q;
+
+  get_pixel_linear(path->index, &q);
+  path_init(path, path->index, 0);
+  path_set_pixel(path, q._i, q._j);
+
+  // random index to decorrelate lambda sampling of pointsampler of rand_halton
+  path->index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
+    
+  // extend path once to determine pixel on camera and first vertex (hitpoint)
   if(path_extend(path)) return;
 
   while(1) {
     // sample light source
     if(nee_sample(path)) break;
 
-    // path.throughput == p_hat/pdf
     md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
-    md_t pdf = path_pdf(path);
-    //mf_t throughput = sampler_throughput(path); //md_2f(md_div(contr, pdf));
-    //if(mf_any(mf_gt(path->throughput, mf_set1(0.0)))) {
-    const mf_t w = sampler_mis(path);
-    const mf_t p = mf_div(md_2f(pdf), w);
-    pointsampler_splat(path, mf_div(md_2f(measurement), p));
-    //}
+    double pdf = md_hsum(path_pdf(path));
+    pointsampler_splat(path, md_2f(md_div(measurement, md_set1(pdf))));
+
+    // pop area sampled light vertex
     path_pop(path);
 
-    // extend path
+    // extend path with bsdf sampling
     if(path_extend(path)) break;
   }
 }
@@ -81,14 +74,6 @@ mf_t sampler_throughput(path_t *path)
   for(int k=0;k<path->length;k++)
     pdf = md_mul(pdf, mf_2d(path_pdf_extend(path, k)));
   return md_2f(md_div(measurement, pdf));
-}
-
-md_t sampler_sum_pdf_dwp(path_t *p)
-{
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(mf_div(path_pdf_extend(p, v), mf_set1(path_G(p, v)))));
-  return pdf;
 }
 
 void sampler_print_info(FILE *fd)

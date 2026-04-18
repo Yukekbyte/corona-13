@@ -80,26 +80,15 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      // Cached value is flawed, not always the same...
-      // use cached value instead of calculating explicitly
-      // double hero_throughput = mf_hsum(path.throughput);
-      // if(hero_throughput > 0.) {
-      //   // w = mis * phat * 1/pdf
-      //   // - mis weight is 1 for samples of same path tree (cuz each sample diff length)
-      //   // - cached throughput is f / pdf 
-      //   // - we use phat := hsum(f)
-      //   update(r, &path, hero_throughput, 1.);
-      // }
       double phat = p_hat(&path);
-      double pdf = md(path_pdf(&path), 0);
-      mf_t mis = sampler_mis(&path); // Hero MIS, don't confuse this with the resampling weight MIS (which is 1)!
-      double hero = mf(mis, 0); // cast to double
+      double pdf = md_hsum(path_pdf(&path));
       if(phat > 0. && pdf > 0.)
-        update(r, &path, hero * phat/pdf, 1.); // pdf /= hero <=> 1/pdf *= hero
+        update(r, &path, phat/pdf, 1.);
       else
         r->c += 1.;
       
       // splat sample anyway
+      mf_t mis = sampler_mis(&path); // Hero MIS, don't confuse this with the resampling weight MIS from above (which is 1/M)!
       if(splat_cb) splat_cb(&path, mf_mul(path.throughput, mis));
       
       path_pop(&path);
@@ -109,8 +98,8 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     }
   }
 
-  // mis weights for each chosen sample per path tree is 1/M (
-  // added now instead of before for simplicity, is mathematically equivalent
+  // mis weights for each chosen sample per path tree is 1/M
+  // added now instead of before for simplicity, because it's mathematically equivalent
   r->w_sum *= 1./M;
 
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
