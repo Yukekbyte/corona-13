@@ -20,6 +20,7 @@
 #include "sampler.h"
 #include "spectrum.h"
 #include "pointsampler.h"
+#include "points.h"
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
@@ -40,6 +41,7 @@ typedef struct reservoir_t {
   double w_sum; // sum of weights
   double c;     // confidence weight of output (= the amount of samples behind the output sample)
   double W;     // contribution weight: estimate for 1/p
+  uint8_t envmap;
 } reservoir_t;
 
 typedef struct pixel_t {
@@ -98,20 +100,20 @@ static void ris(pixel_t q, reservoir_t *r) {
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
+  r->envmap = 0;
 
   for(int i = 0; i < M; i++) {
     path_t path;
-    path_init(&path, 0, 0);
+    uint32_t index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
+    path_init(&path, index, 0);
     path_set_pixel(&path, q._i, q._j);
+    path_set_aperture(&path, 0, 0);
+
     
     if(path_extend(&path)) break;
 
-    if(path.v[path.length-1].flags & s_environment) {
-      // give reservoir non-zero confidence to serve as indicator
-      r->c = 1;
-      path_copy(r->path, &path);
-      break;
-    }
+    if(path.v[path.length-1].flags & s_environment)
+      r->envmap = 1;
     
     // generate path tree
     while(1) {
@@ -119,7 +121,7 @@ static void ris(pixel_t q, reservoir_t *r) {
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
       double phat = p_hat(&path);
-      double pdf = md(path_pdf(&path), 0); // hero wavelength pdf
+      double pdf = md_hsum(path_pdf(&path)); // hero wavelength pdf
       if(phat > 0. && pdf > 0.)
         update(r, &path, phat/pdf, 1.); // mis weight is 1 for samples of same path tree because each sample has a different length
       else
@@ -141,13 +143,13 @@ static void ris(pixel_t q, reservoir_t *r) {
   } 
 }
 
-float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
+float shift(path_t *shifted, pixel_t q, path_t *source_path) {
   if(is_null(source_path)) {
     set_null(shifted);
     return 0.0;
   }
 
-  float J = path_shift(shifted, q._i, q._j, source_path, 1);
+  float J = path_shift(shifted, q._i, q._j, source_path);
   
   // check if shift failed
   if (J == 0.0f || p_hat(shifted) == 0.0f) {
@@ -442,6 +444,7 @@ sampler_t *sampler_init() {
       r->w_sum = 0.;
       r->c = 0.;
       r->W = 0.;
+      r->envmap = 0;
     }
   }
 
@@ -497,7 +500,7 @@ void sampler_pass_sample(uint64_t index) {
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
   // check for env map hit
-  if(not_null(r->path) && r->path->v[r->path->length-1].flags & s_environment) return;
+  if(r->envmap) return;
 
   // Spatial re-use pass
   reservoir_t *ns[NEIGHBOUR_COUNT];
@@ -515,16 +518,6 @@ void sampler_pass_sample(uint64_t index) {
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static inline mf_t path_pdf_hero(const path_t *p)
-{
-  // this is just the hero wavelength weight:
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
-
 void sampler_create_path(path_t *path)
 {
   pixel_t q;
@@ -532,13 +525,12 @@ void sampler_create_path(path_t *path)
   reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
 
   // don't splat null sample
-  if(is_null(r->path)) return;
+  if(is_null(r->path) || r->envmap) return;
 
   // estimator f(r.Y) * r.W
   const md_t estimator = md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W));
-  const mf_t w = path_pdf_hero(r->path);
 
-  pointsampler_splat(r->path, mf_mul(w, md_2f(estimator)));
+  pointsampler_splat(r->path, md_2f(estimator));
 }
 
 void sampler_print_info(FILE *fd)

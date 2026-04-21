@@ -292,7 +292,7 @@ void path_reverse(path_t *path, const path_t *input);
 int path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source_path);
 
 // create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
-float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path, int end);
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, path_t *source_path);
 
 // connect two paths, extending path1 by a connection edge and the reverse of path2.
 mf_t path_connect(path_t *path1, const path_t *path2);
