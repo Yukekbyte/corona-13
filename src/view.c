@@ -904,6 +904,11 @@ mf_t view_cam_pdf(const path_t *p, int v)
   return camera_pdf(rt.view->cam+p->sensor.camid, p, v);
 }
 
+float view_cam_G(const path_t *p, int v)
+{
+  return camera_G(rt.view->cam+p->sensor.camid, p, v);
+}
+
 mf_t view_cam_connect(path_t *p)
 {
   return camera_connect(rt.view->cam+p->sensor.camid, p);

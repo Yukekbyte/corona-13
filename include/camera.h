@@ -52,6 +52,8 @@ mf_t camera_sample(const camera_t *c, path_t *p);
 // evaluate pdf of sampling vertex v (0 or p->length-1)
 mf_t camera_pdf(const camera_t *c, const path_t *p, int v);
 
+float camera_G(const camera_t *c, const path_t *p, int v);
+
 // connect path to camera, either updating vertex p->v[0] or the last one,
 // depending on tracing direction (p->v[0].mode & s_sensor?)
 mf_t camera_connect(const camera_t *c, path_t *p);

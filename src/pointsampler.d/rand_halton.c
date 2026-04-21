@@ -55,8 +55,9 @@ float pointsampler(path_t *p, int dim)
 {
   const int tid = common_get_threadid();
   if(rt.pointsampler->rand[tid].enabled)
-  return rt.pointsampler->rand[tid].rand[dim];
+    return rt.pointsampler->rand[tid].rand[dim];
   
+  // make sure lambda is only sampled once per path
   if(dim & s_dim_lambda) {
     int v = p->length;
     const int end = p->v[v].rand_beg;
@@ -71,14 +72,7 @@ float pointsampler(path_t *p, int dim)
 
 float pointsampler_store(path_t *p, int v, int dim)
 {
-  // pure random mersenne twister
-  const int tid = common_get_threadid();
-
-  float r;
-  if(rt.pointsampler->rand[tid].enabled)
-    r = rt.pointsampler->rand[tid].rand[dim];
-  else 
-    r = points_rand(rt.points, tid);
+  float r = pointsampler(p, dim);
   
   if(dim & s_dim_omega_x)
     p->v[v].rands.omega_x = r;
