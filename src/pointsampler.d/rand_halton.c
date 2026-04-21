@@ -55,7 +55,7 @@ float pointsampler(path_t *p, int dim)
 {
   const int tid = common_get_threadid();
   if(rt.pointsampler->rand[tid].enabled)
-  return rt.pointsampler->rand[tid].rand[dim];
+    return rt.pointsampler->rand[tid].rand[dim];
   
   if(dim & s_dim_lambda) {
     int v = p->length;

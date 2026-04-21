@@ -43,7 +43,7 @@ void sampler_create_path(path_t *path)
   path_set_pixel(path, q._i, q._j);
 
   // random index to decorrelate lambda sampling of pointsampler of rand_halton
-  path->index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
+  // path->index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
     
   // extend path once to determine pixel on camera and first vertex (hitpoint)
   if(path_extend(path)) return;

@@ -517,28 +517,31 @@ float path_shift_lambda(path_t *path, mf_t lambda) {
   return md(new_pdf, 0) / md(old_pdf, 0);
 }
 
-float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path) {
-  assert(source_path->length > 2);
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source) {
+  assert(source->length > 2);
 
-  *shifted = *source_path;
+  *shifted = *source;
   shifted->sensor.pixel_i = pixel_i;
   shifted->sensor.pixel_j = pixel_j;
   shifted->sensor.pixel_set = 1;
 
   shader_exterior_medium(shifted);
-  mf_t cam = view_cam_sample(shifted); // sets e[1].omega
-  if(mf_all(mf_lte(cam, mf_set1(0.0f)))) 
+  mf_t throughput = view_cam_sample(shifted); // sets e[1].omega
+  if(mf_all(mf_lte(throughput, mf_set1(0.0f)))) 
     return 0.0; // camera ray failed
 
-  int v = 0;
-  float J = 1;
+  float shifted_cam = mf(shifted->v[1].pdf, 0); // still in projected solid angle measure
+  float source_cam = mf(view_cam_pdf(source, 0), 0);
+  float J = source_cam / shifted_cam;
+  int v = 1;
 
-  if(path_propagate(shifted, v+1, s_propagate_mutate)) 
+  if(path_propagate(shifted, v, s_propagate_mutate)) 
     return 0.0; // propagation failed
-  v++;
 
-  if(shifted->v[v].mode != source_path->v[v].mode) return 0.0;
+  if(shifted->v[v].mode != source->v[v].mode) return 0.0;
+  if(shifted->v[v].flags & s_environment) return 0.0;
 
+  #if 0
   while(!(shifted->v[v].mode & s_diffuse 
           && source_path->v[v].mode & s_diffuse
           && source_path->v[v+1].mode & (s_diffuse | s_emit))) { // or s_emit!
@@ -606,24 +609,20 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   // if(v > 1) {
   //   printf("Did %d bounces before reconnecting with Jacobian up until that point = %f\n", v, J);
   // }
+  #endif
   
   // project to reconnect at next vertex
   if(path_project(shifted, v+1, s_propagate_mutate) ||
-      (shifted->v[v+1].flags           != source_path->v[v+1].flags) ||
-      (shifted->v[v+1].hit.shader      != source_path->v[v+1].hit.shader) ||
-      (shifted->v[v+1].interior.shader != source_path->v[v+1].interior.shader) ||
-      (primid_invalid(shifted->v[v+1].hit.prim) != primid_invalid(source_path->v[v+1].hit.prim))) {
+      (shifted->v[v+1].flags           != source->v[v+1].flags) ||
+      (shifted->v[v+1].hit.shader      != source->v[v+1].hit.shader) ||
+      (shifted->v[v+1].interior.shader != source->v[v+1].interior.shader) ||
+      (primid_invalid(shifted->v[v+1].hit.prim) != primid_invalid(source->v[v+1].hit.prim))) {
     return 0.0;
   }
 
+  J *= path_G(source, v) / path_G(shifted, v);
   v++;
 
-  float shif = path_lambert(shifted, v, shifted->e[v].omega) / (shifted->e[v].dist * shifted->e[v].dist);
-  float sour = path_lambert(source_path, v, source_path->e[v].omega) / (source_path->e[v].dist * source_path->e[v].dist);
-  // if(shif == 0.0f) return 0.0f;
-  // J *= (sour / shif);
-  if(sour == 0.0f) return 0.0f;
-  J *= shif / sour;
   return J;
 }
 
