@@ -3,7 +3,7 @@
 #include "pathspace.h"
 #include "points.h"
 
-#define M 1
+#define M 8
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
@@ -69,7 +69,6 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     
     path_init(&path, index, 0);
     path_set_pixel(&path, q._i, q._j);
-    path_set_aperture(&path, 0, 0); // pinhole
     
     if(path_extend(&path)) break;
 

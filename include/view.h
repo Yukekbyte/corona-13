@@ -108,8 +108,6 @@ mf_t view_cam_sample(struct path_t *p);
 // evaluate pdf of sampling vertex v (0 or p->length-1)
 mf_t view_cam_pdf(const struct path_t *p, int v);
 
-float view_cam_G(const path_t *p, int v);
-
 // connect path to camera, either updating vertex p->v[0] or the last one,
 // depending on tracing direction (p->v[0].mode & s_sensor?)
 mf_t view_cam_connect(struct path_t *p);

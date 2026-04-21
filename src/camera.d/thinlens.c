@@ -177,16 +177,6 @@ mf_t camera_pdf(const camera_t *c, const path_t *p, int v)
   return mf_set1(pdf_v / G);
 }
 
-float camera_G(const camera_t *c, const path_t *p, int v)
-{
-  assert(v == 0 || v == p->length-1);
-  // use direction of edge leading up to vertex v from outside the camera.
-  const int e = v ? v : 1;
-  const float dot = fabsf(dotproduct(p->e[e].omega, p->v[v].hit.n));
-  const float G = (dot*dot*dot*dot)/(c->focal_length * c->focal_length);
-  return G;
-}
-
 mf_t camera_connect(const camera_t *c, path_t *p)
 {
   //             path tracing case               mutation case, end vertex there already              light tracing case, create a new vertex at the end     

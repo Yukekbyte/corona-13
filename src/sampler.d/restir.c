@@ -23,8 +23,8 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 3
-//#define SPLAT_COUNT_CORRECTOR mf_set1(1.0/((double)(M + SPATIAL_REUSE_PASSES + 1)))
+#define SPATIAL_REUSE_PASSES 2
+#define SPLAT_COUNT_CORRECTOR mf_set1(1.0/((double)(M + SPATIAL_REUSE_PASSES + 1)))
 #define TEMPORAL_REUSE 0
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
@@ -43,6 +43,12 @@ static void get_pixel(const uint64_t index, pixel_t *q) {
 
 static void get_pixel_linear(const uint64_t index, pixel_t *q) {
   pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
+}
+
+static inline void splat(path_t *p, mf_t estimator) {
+  if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
+    pointsampler_splat(p, mf_mul(estimator, SPLAT_COUNT_CORRECTOR));
+  }
 }
 
 // Pick neighbours with R2 sequence
@@ -237,6 +243,11 @@ void sampler_pass_sample(uint64_t index) {
   #else
     combine(q, r, qns, ns);
   #endif
+
+  // splat sample anyway
+  // if(is_null(r->path) || r->envmap) return;
+  // mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
+  // splat(r->path, estimator);
 }
 
 void sampler_prepare_frame(sampler_t *s) {}
@@ -256,6 +267,7 @@ void sampler_create_path(path_t *path)
   if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
     pointsampler_splat(r->path, estimator);
   }
+  // splat(r->path, estimator);
 }
 
 void sampler_print_info(FILE *fd)
