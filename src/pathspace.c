@@ -525,10 +525,7 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   shifted->sensor.pixel_j = pixel_j;
   shifted->sensor.pixel_set = 1;
 
-  shader_exterior_medium(shifted);
-  mf_t throughput = view_cam_sample(shifted); // sets e[1].omega
-  if(mf_all(mf_lte(throughput, mf_set1(0.0f)))) 
-    return 0.0; // camera ray failed
+  view_cam_sample(shifted); // sets e[1].omega
 
   float shifted_cam = mf(shifted->v[1].pdf, 0); // still in projected solid angle measure
   float source_cam = mf(view_cam_pdf(source, 0), 0);
@@ -621,7 +618,6 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   }
 
   J *= path_G(source, v) / path_G(shifted, v);
-  v++;
 
   return J;
 }
