@@ -23,9 +23,8 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 2
+#define SPATIAL_REUSE_PASSES 3
 #define SPLAT_COUNT_CORRECTOR mf_set1(1.0/((double)(M + SPATIAL_REUSE_PASSES + 1)))
-#define TEMPORAL_REUSE 0
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 

@@ -69,7 +69,7 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     
     path_init(&path, index, 0);
     path_set_pixel(&path, q._i, q._j);
-    path_set_aperture(&path, 0, 0);
+    //path_set_aperture(&path, 0, 0);
     
     if(path_extend(&path)) break;
 

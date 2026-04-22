@@ -493,28 +493,28 @@ void path_reverse(path_t *path, const path_t *input)
 }
 
 float path_shift_lambda(path_t *path, mf_t lambda) {
-  // evaluate pdf as if sampled
-  md_t old_pdf = md_set1(1.0);
-  for(int v=1;v<path->length;v++)
-    old_pdf = md_mul(old_pdf, mf_2d(mf_div(path_pdf_extend(path, v), mf_set1(path_G(path, v)))));
+  // assume last vertex area light sampled
 
-  if(md(old_pdf, 0) == 0.0) return 0.0;
+  // evaluate pdf of inner vertices (cam pdf, light source pdf and G terms cancel out)
+  float old_pdf = 1.0;
+  for(int v=2;v<path->length-1;v++)
+    old_pdf *= mf(shader_pdf(path, v-1), 0);
+
+  if(old_pdf == 0.0) return 0.0;
 
   path->lambda = lambda;
 
-  for(int v = 1; v < path->length; v++) {
-    if(path_edge_init_volume(path, v)) return 0.0;
+  for(int v = 1; v < path->length; v++)
     shader_prepare(path, v);
-  }
 
-  // evaluate pdf as if sampled
-  md_t new_pdf = md_set1(1.0);
-  for(int v=1;v<path->length;v++)
-    new_pdf = md_mul(new_pdf, mf_2d(mf_div(path_pdf_extend(path, v), mf_set1(path_G(path, v)))));
+  // evaluate pdf of inner vertices with new lambda
+  float new_pdf = 1.0;
+  for(int v=2;v<path->length-1;v++)
+    new_pdf *= mf(shader_pdf(path, v-1), 0);
 
-  if(md(new_pdf, 0) == 0.0) return 0.0;
+  if(new_pdf == 0.0) return 0.0;
 
-  return md(new_pdf, 0) / md(old_pdf, 0);
+  return new_pdf / old_pdf; // is 1 for direct lighting
 }
 
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source) {

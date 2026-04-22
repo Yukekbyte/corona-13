@@ -5,6 +5,7 @@
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
 #define PAIRWISE_COMBINE 1
+#define TEMPORAL_REUSE 0
 #define LAMBDA_OFFSET 123.0f // is a float
 #define CONFIDENCE_CAP 256. // is a double
 
@@ -164,13 +165,14 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
 
 
 #if TEMPORAL_REUSE
-  float shift_lambda(path_t *path) {
+  float shift_lambda(path_t *path, uint8_t invert) {
     if(is_null(path)) return 0.0;
 
     const float range = spectrum_sample_max - spectrum_sample_min;
+    float offset = invert ? -LAMBDA_OFFSET : LAMBDA_OFFSET;
 
     // shift lambdas with offset and wrap around the wavelengths that exceed spectrum_sample_max
-    mf_t new_lambda = mf_add(path->lambda, mf_set1(LAMBDA_OFFSET));
+    mf_t new_lambda = mf_add(path->lambda, mf_set1(offset));
     mf_t mask = mf_gt(new_lambda, mf_set1(spectrum_sample_max));
     new_lambda = mf_select(mf_sub(new_lambda, mf_set1(range)), new_lambda, mask);
 
@@ -192,12 +194,12 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
     if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs (temporal)\n"); return; }
     
     // Shift lambda of s, should be deterministic
-    float Js = shift_lambda(s->path);
+    float Js = shift_lambda(s->path, 0);
 
     // MIS weights
-    double cphats = s->c * p_hat(s->path) * Js;
-    double cphatr = r->c * p_hat(r->path);
-    double total = cphats + cphatr;
+    volatile double cphats = s->c * p_hat(s->path) * Js;
+    volatile double cphatr = r->c * p_hat(r->path);
+    volatile double total = cphats + cphatr;
 
     if(total == 0) {
       // fast exit
@@ -205,12 +207,19 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
       return;
     }
 
-    double mis_s = cphats / total;
-    double mis_r = cphatr / total;
-    
+    volatile double sc = s->c;
+    volatile double rc = r->c;
+    volatile double mis_s = s->c / (r->c + s->c); //cphats / total;
+    volatile double mis_r = r->c / (r->c + s->c); //cphatr / total;
+    assert(mis_r == mis_r);
+    assert(mis_s == mis_s);
+    assert(mis_r >= 0.);
+    assert(mis_s >= 0.);
+    assert(fabs(mis_s + mis_r - 1.0) < 0.001 );
+
     // resampling weights
-    double w_r = mis_r * p_hat(r->path) * r->W;
-    double w_s = mis_s * p_hat(s->path) * s->W;
+    volatile double w_r = mis_r * p_hat(r->path) * r->W;
+    volatile double w_s = mis_s * p_hat(s->path) * s->W * Js;
 
     // combine reservoirs in s
     s->w_sum = w_s;
