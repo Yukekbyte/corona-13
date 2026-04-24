@@ -679,14 +679,16 @@ void view_render()
     for(int k=0;k<rt.num_threads;k++)
       pthread_pool_task_init(t->task + k, &t->pool, prepare_sample, t);
     pthread_pool_wait(&t->pool);
+    sampler_switch_read_write_buffers();
 
     for(int i=0;i<sampler_passes();i++) {
       // Spatial re-use pass
       t->prepare_counter = start;
       t->prepare_end = end;
       for(int k=0;k<rt.num_threads;k++)
-      pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
+        pthread_pool_task_init(t->task + k, &t->pool, pass_sample, t);
       pthread_pool_wait(&t->pool);
+      sampler_switch_read_write_buffers();
     }
     #endif
     

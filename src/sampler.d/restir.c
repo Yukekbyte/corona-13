@@ -24,30 +24,35 @@
 #include "gris.h"
 
 #define SPATIAL_REUSE_PASSES 3
-#define SPLAT_COUNT_CORRECTOR mf_set1(1.0/((double)(M + SPATIAL_REUSE_PASSES + 1)))
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
 typedef struct sampler_t {
-  reservoir_t **reservoirs;
+  reservoir_t **reservoirsA;
+  reservoir_t **reservoirsB;
+  int write; // 1 == A, 2 == B
   int spatial_reuse_passes;
 } sampler_t;
 
 // fractional part of float
 static inline float fractf(float x) { return x - (int)x; }
 
-static void get_pixel(const uint64_t index, pixel_t *q) {
-  pointsampler_pixel(index, &q->i, &q->j, &q->_i, &q->_j);
-}
-
 static void get_pixel_linear(const uint64_t index, pixel_t *q) {
   pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
 }
 
-static inline void splat(path_t *p, mf_t estimator) {
-  if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
-    pointsampler_splat(p, mf_mul(estimator, SPLAT_COUNT_CORRECTOR));
-  }
+static inline reservoir_t* get_write_reservoir(pixel_t q) {
+  if(rt.sampler->write == 1) 
+    return &rt.sampler->reservoirsA[q.i][q.j];
+  else
+    return &rt.sampler->reservoirsB[q.i][q.j];
+}
+
+static inline reservoir_t* get_read_reservoir(pixel_t q) {
+  if(rt.sampler->write == 1) 
+    return &rt.sampler->reservoirsB[q.i][q.j];
+  else
+    return &rt.sampler->reservoirsA[q.i][q.j];
 }
 
 // Pick neighbours with R2 sequence
@@ -114,23 +119,24 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     pixel_t *qn = &qns[found];
     qn->i = (uint64_t)l;
     qn->j = (uint64_t)m;
-    reservoir_t *n = &rt.sampler->reservoirs[qn->i][qn->j];
+    reservoir_t *n = get_read_reservoir(*qn);
+
+    // bias in checking sample value? what about envmaps?
+    // // Check for geometric similarity (up to a point)
+    // if(k <= 3*NEIGHBOUR_COUNT && k <= 0.5*MAX_ATTEMPTS) {
+    //   // angle between normals < 25 deg (0.435 rad) 
+    //   if(acosf(dotproduct(path->v[1].hit.n, n->path->v[1].hit.n)) > 0.436f) {
+    //     k++;
+    //     continue;
+    //   }
     
-    // Check for geometric similarity (up to a point)
-    if(k <= 3*NEIGHBOUR_COUNT && k <= 0.5*MAX_ATTEMPTS) {
-      // angle between normals < 25 deg (0.435 rad) 
-      if(acosf(dotproduct(path->v[1].hit.n, n->path->v[1].hit.n)) > 0.436f) {
-        k++;
-        continue;
-      }
-    
-      // depth difference can't be more than 10 percent
-      float depthratio = path->e[1].dist / n->path->e[1].dist;
-      if(depthratio < 0.9f || 1.1f < depthratio) {
-        k++;
-        continue;
-      }
-    }
+    //   // depth difference can't be more than 10 percent
+    //   float depthratio = path->e[1].dist / n->path->e[1].dist;
+    //   if(depthratio < 0.9f || 1.1f < depthratio) {
+    //     k++;
+    //     continue;
+    //   }
+    // }
 
     pointsampler_subpixel(qn->i, qn->j, &qn->_i, &qn->_j);
 
@@ -152,28 +158,34 @@ sampler_t *sampler_init() {
   sampler_t *s = (sampler_t *)malloc(sizeof(sampler_t));
   if(s == NULL) goto fail;
 
-  s->reservoirs = (reservoir_t**)malloc(w * sizeof(reservoir_t*));
-  if(s->reservoirs == NULL) goto fail;
+  s->reservoirsA = (reservoir_t**)malloc(w * sizeof(reservoir_t*));
+  if(s->reservoirsA == NULL) goto fail;
+  s->reservoirsB = (reservoir_t**)malloc(w * sizeof(reservoir_t*));
+  if(s->reservoirsB == NULL) goto fail;
 
   for(i = 0; i < w; i++) {
-    if(posix_memalign((void**)&s->reservoirs[i], 32, h * sizeof(reservoir_t)))
+    if(posix_memalign((void**)&s->reservoirsA[i], 32, h * sizeof(reservoir_t)))
+      goto fail;
+    if(posix_memalign((void**)&s->reservoirsB[i], 32, h * sizeof(reservoir_t)))
       goto fail;
   }
 
   reservoir_t *r;
   for(i = 0; i < w; i++) {
     for(j = 0; j < h; j++) {
-      r = &s->reservoirs[i][j];
+      r = &s->reservoirsA[i][j];
       if(posix_memalign((void**)&r->path, 32, sizeof(path_t))) 
         goto fail;
-      set_null(r->path);
-      r->w_sum = 0.;
-      r->c = 0.;
-      r->W = 0.;
-      r->envmap = 0;
+      reset(r);
+
+      r = &s->reservoirsB[i][j];
+      if(posix_memalign((void**)&r->path, 32, sizeof(path_t))) 
+        goto fail;
+      reset(r);
     }
   }
 
+  s->write = 1;
   s->spatial_reuse_passes = SPATIAL_REUSE_PASSES;
 
   return s;
@@ -190,11 +202,14 @@ void sampler_cleanup(sampler_t *s) {
   
   for(i = 0; i < w; i++) {
     for(j = 0; j < h; j++) {
-      free(s->reservoirs[i][j].path);
+      free(s->reservoirsA[i][j].path);
+      free(s->reservoirsB[i][j].path);
     }
-    free(s->reservoirs[i]);
+    free(s->reservoirsA[i]);
+    free(s->reservoirsB[i]);
   }
-  free(s->reservoirs);
+  free(s->reservoirsA);
+  free(s->reservoirsB);
   free(s);
 }
 
@@ -202,8 +217,8 @@ void sampler_prepare_sample(uint64_t index) {
   // get pixels linearly
   pixel_t q;
   get_pixel_linear(index, &q);
-  reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
-  
+  reservoir_t *r = get_write_reservoir(q);
+
   #if TEMPORAL_REUSE
     reservoir_t new;
     path_t path;
@@ -223,11 +238,27 @@ void sampler_prepare_sample(uint64_t index) {
 }
 
 int sampler_passes() { return SPATIAL_REUSE_PASSES; }
+void sampler_switch_read_write_buffers() { 
+  if(rt.sampler->write == 1)
+    rt.sampler->write = 2;
+  else
+    rt.sampler->write = 1;
+}
+
 void sampler_pass_sample(uint64_t index) {
   // get pixels with pointsampler sequence to avoid artifacts and race conditions
   pixel_t q;
-  get_pixel(index, &q);
-  reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
+  get_pixel_linear(index, &q);
+  reservoir_t *r = get_read_reservoir(q);
+  reservoir_t *w = get_write_reservoir(q);
+  
+  #if PAIRWISE_COMBINE
+    //TODO: work copy away
+    path_t *tmp = w->path;
+    *w = *r;              
+    w->path = tmp;
+    path_copy(w->path, r->path);
+  #endif
 
   if(r->envmap) return;
 
@@ -238,15 +269,10 @@ void sampler_pass_sample(uint64_t index) {
   
   #if PAIRWISE_COMBINE
     for(int k = 0; k < NEIGHBOUR_COUNT; k++)
-      combine_pair(q, r, qns[k], ns[k]);
+      combine_pair(q, w, qns[k], ns[k]);
   #else
-    combine(q, r, qns, ns);
+    combine(q, w, r, qns, ns);
   #endif
-
-  // splat sample anyway
-  // if(is_null(r->path) || r->envmap) return;
-  // mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));
-  // splat(r->path, estimator);
 }
 
 void sampler_prepare_frame(sampler_t *s) {}
@@ -256,8 +282,7 @@ void sampler_create_path(path_t *path)
 {
   pixel_t q;
   get_pixel_linear(path->index, &q);
-  reservoir_t *r = &rt.sampler->reservoirs[q.i][q.j];
-
+  reservoir_t *r = get_read_reservoir(q);
   // don't splat null sample and don't support envmaps
   if(is_null(r->path) || r->envmap) return;
 
@@ -266,7 +291,6 @@ void sampler_create_path(path_t *path)
   if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
     pointsampler_splat(r->path, estimator);
   }
-  // splat(r->path, estimator);
 }
 
 void sampler_print_info(FILE *fd)

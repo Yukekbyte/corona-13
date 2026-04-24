@@ -32,6 +32,14 @@ static void update(reservoir_t *r, path_t *path, double weight, double c) {
     path_copy(r->path, path);
 }
 
+static inline void reset(reservoir_t *r) {
+  set_null(r->path);
+  r->c = 0.;
+  r->w_sum = 0.;
+  r->W = 0.;
+  r->envmap = 0;
+}
+
 // Use the integrand f as target function p_hat
 static double p_hat(path_t *path) {
   if(is_null(path))
@@ -54,12 +62,7 @@ typedef void (*splat_fn)(path_t*, mf_t);
 // Perform Resampled Importance Sampling (streaming RIS)
 // r will be reset and filled with initial samples for pixel q
 static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
-  // reset
-  set_null(r->path);
-  r->c = 0.;
-  r->w_sum = 0.;
-  r->W = 0.;
-  r->envmap = 0;
+  reset(r);
 
   for(int i = 0; i < M; i++) {
     path_t path;
