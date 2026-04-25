@@ -4,7 +4,7 @@
 
 #define NEIGHBOUR_COUNT 4
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-#define PAIRWISE_COMBINE 1
+#define PAIRWISE_COMBINE 0
 #define TEMPORAL_REUSE 0
 #define LAMBDA_OFFSET 123.0f // is a float
 #define CONFIDENCE_CAP 256. // is a double
@@ -56,7 +56,7 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
 
 #if PAIRWISE_COMBINE
   // Combine, but with only two reservoirs
-  static void combine_pair(pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r) {
+  static void combine_pair(reservoir_t *w, pixel_t qs, reservoir_t *s, pixel_t qr, const reservoir_t *r) {
     // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
     if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
 
@@ -78,12 +78,12 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
     // > normally phat_s > 0. when not null (a sample can only be held if phat > 0...),
     //   but phat can occasionally evaluate to a different value as before, so to not get nan's, we also check phat_r/s <= 0.
     if(is_null(s->path) || phat_s <= 0.)
-      mis_s = 0.0f;
+      mis_s = 0.0;
     else
       mis_s = s->c * phat_s / (s->c * phat_s + r->c * phat_s_from_r * Js);
     
     if(is_null(r->path) || phat_r <= 0.)
-      mis_r = 0.0f;
+      mis_r = 0.0;
     else
       mis_r = r->c * phat_r / (r->c * phat_r + s->c * phat_r_from_s * Jr);
     
@@ -92,22 +92,21 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
     double w_s = mis_s * phat_s        * s->W;
 
     // combine reservoirs in s
-    s->w_sum = w_s;
-    update(s, &r_path_from_qs, w_r, r->c);
+    reset(w);
+    update(w, s->path,         w_s, s->c);
+    update(w, &r_path_from_qs, w_r, r->c);
 
     // update estimator
-    if(not_null(s->path))
-      s->W = s->w_sum / p_hat(s->path);
-    else
-      s->W = 0.;
-    
+    if(not_null(w->path))
+      w->W = w->w_sum / p_hat(w->path);
+
     // confidence capping
-    if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
+    if(w->c > CONFIDENCE_CAP) w->c = CONFIDENCE_CAP;
   }
 #else
   // Combine multiple reservoirs in s
   // The samples in r[] (r[i]->path) will be shifted to the domain (pixel) of the sample in s (s->path).
-  static void combine(pixel_t qs, reservoir_t *s, pixel_t qr[], reservoir_t *r[]) {
+  static void combine(reservoir_t *w, pixel_t qs, reservoir_t *s, pixel_t qr[], reservoir_t *r[]) {
     for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
       // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
       if(s == r[i]) { printf("tried to combine reservoir with itself\n"); return; }
@@ -119,47 +118,42 @@ double mis(path_t *x, path_t *y, float J, double cy, pixel_t q[], double c[]) {
     float J[NEIGHBOUR_COUNT];
     double c[NEIGHBOUR_COUNT];
     double m[NEIGHBOUR_COUNT];
-    double m_s;
+
     for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
       J[i] = shift(&Y[i], qs, r[i]->path);
       c[i] = r[i]->c;
     }
 
     // MIS weights
-    m_s = mis(s->path, s->path, 1.0f, s->c, qr, c);
+    double m_s = mis(s->path, s->path, 1.0f, s->c, qr, c);
 
     for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
       pixel_t q = qr[i];
       double cy = c[i];
 
-      qr[i] = qs;
-      c[i] = s->c;
-      
+      qr[i] = qs; c[i] = s->c;
       m[i] = mis(r[i]->path, &Y[i], J[i], cy, qr, c);
-
-      qr[i] = q;
-      c[i] = cy;
+      qr[i] = q;  c[i] = cy;
     }
 
-    double w[NEIGHBOUR_COUNT];
+    reset(w);
+    
+    // Resampling weights
+    double ws[NEIGHBOUR_COUNT];
     double w_s = m_s * p_hat(s->path) * s->W;
-    s->w_sum = w_s;
+    update(w, s->path, w_s, s->c);
+    
     for(int i = 0; i < NEIGHBOUR_COUNT; i++) {
-      // resampling weight
-      w[i] = m[i] * p_hat(&Y[i]) * r[i]->W * J[i];
-
-      // combine reservoirs in s
-      update(s, &Y[i], w[i], c[i]);
+      ws[i] = m[i] * p_hat(&Y[i]) * r[i]->W * J[i];
+      update(w, &Y[i], ws[i], c[i]);
     }
 
     // update estimator
-    if(not_null(s->path))
-      s->W = s->w_sum / p_hat(s->path);
-    else
-      s->W = 0.;
-    
+    if(not_null(w->path))
+      w->W = w->w_sum / p_hat(w->path);
+
     // confidence capping
-    if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
+    if(w->c > CONFIDENCE_CAP) w->c = CONFIDENCE_CAP;
   }
 #endif
 

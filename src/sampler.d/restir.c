@@ -23,7 +23,7 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 3
+#define SPATIAL_REUSE_PASSES 2
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
@@ -251,14 +251,6 @@ void sampler_pass_sample(uint64_t index) {
   get_pixel_linear(index, &q);
   reservoir_t *r = get_read_reservoir(q);
   reservoir_t *w = get_write_reservoir(q);
-  
-  #if PAIRWISE_COMBINE
-    //TODO: work copy away
-    path_t *tmp = w->path;
-    *w = *r;              
-    w->path = tmp;
-    path_copy(w->path, r->path);
-  #endif
 
   if(r->envmap) return;
 
@@ -269,9 +261,9 @@ void sampler_pass_sample(uint64_t index) {
   
   #if PAIRWISE_COMBINE
     for(int k = 0; k < NEIGHBOUR_COUNT; k++)
-      combine_pair(q, w, qns[k], ns[k]);
+      combine_pair(w, q, r, qns[k], ns[k]);
   #else
-    combine(q, w, r, qns, ns);
+    combine(w, q, r, qns, ns);
   #endif
 }
 
