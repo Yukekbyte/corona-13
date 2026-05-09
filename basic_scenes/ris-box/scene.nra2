@@ -1,0 +1,73 @@
+black # no env map
+
+37
+
+diffuse # 0
+color d 0.7 0.7 0.7 # 1
+mult 1 1 0 # 2 white diffuse
+
+color d 0 0 0 # 3
+color e 180 180 150 1. # 4
+mult 2 3 4 0 # 5 light
+
+dielectric 1.3 23 # 6
+color g 1 1 1 0.04 # 7
+mult 1 7 6 # 8 glass
+
+color d 0.7 0 0 # 9
+mult 1 9 0 # 10 red diffuse
+
+color d 0 0.7 0 # 11
+mult 1 11 0 # 12 green diffuse
+
+color d 0.05 0.05 0.05 # 13
+mult 1 13 0 # 14 black diffuse
+
+medium_rgb 0.014 0.005 0.003 0.85 # 15
+color v 0.99 0.96 0.94 # 16
+mult 1 16 15 # 17 test
+
+dielectric 1.8 23 # 18
+color g 0.5 0.5 1 0.04 # 19
+mult 1 19 18 # 20 blueish glass
+
+dielectric 1.4 23 # 21
+color g 1 0.2 0.2 0.5 # 22
+mult 1 22 21 # 23 knight
+
+metal Ag # 24
+color g 1.0 1.0 1.0 0.1 # 25
+mult 1 25 24 # 26
+
+dielectric 1.4 23.0 # 27
+color g 0.3 1 0.3 0.01 # 28
+mult 1 28 27 # 29
+
+diffdiel 1.8 20 # 30
+color g 0.95 0.95 0.95 0.05 # 31
+mult 1 31 30 # 32
+
+color d 0.76 0.73 0.64 # 33
+mult 1 33 0 # 34
+
+color d 0.9725 0.9059 0.7333 # 35
+mult 1 35 0 # 36
+
+
+16
+2 geo/bot
+2 geo/top
+2 geo/back
+12 geo/left # 29
+10 geo/right
+5 geo/toplight
+2 geo/cube
+2 geo/longcube
+14 geo/pawn1
+36 geo/pawn2
+36 geo/pawn3
+26 geo/knight 
+36 geo/rook 
+14 geo/bishop
+36 geo/king
+14 geo/queen
