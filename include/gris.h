@@ -15,7 +15,10 @@ float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
     return 0.0;
   }
 
-  float J = path_shift(shifted, q._i, q._j, source_path);
+  float i = q.i + fractf(source_path->sensor.pixel_i);
+  float j = q.j + fractf(source_path->sensor.pixel_j);
+  
+  float J = path_shift(shifted, i, j, source_path);
   
   // check if shift failed
   if (J == 0.0f || p_hat(shifted) == 0.0f) {

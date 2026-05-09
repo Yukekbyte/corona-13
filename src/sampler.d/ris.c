@@ -27,21 +27,11 @@
 typedef struct sampler_t {}
 sampler_t;
 
-static void get_pixel_linear(const uint64_t index, pixel_t *q) {
-  pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
-}
-
 sampler_t *sampler_init() { return 0; }
 
 void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
-
-static inline void splat(path_t *p, mf_t estimator) {
-  if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
-    pointsampler_splat(p, mf_mul(estimator, mf_set1(1./(M+1.))));
-  }
-}
 
 void sampler_create_path(path_t *path)
 {  
@@ -51,20 +41,19 @@ void sampler_create_path(path_t *path)
   path_t p;
   r.path = &p;
 
-  get_pixel_linear(path->index, &q);
+  pointsampler_pixel_linear(path->index, &q.i, &q.j);
   
   // // inital candidate generation
   ris(q, &r, NULL);
 
   // don't splat null sample and don't support envmaps
-  if(is_null(r.path) || r.envmap) return;
+  if(is_null(r.path)) return;
 
   // estimator f(r.Y) * r.W
   const mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r.path, 0, r.path->length-1), md_set1(r.W)));
   if(mf_any(mf_gt(estimator, mf_set1(0.0)))) {
     pointsampler_splat(r.path, estimator);
   }
-  // splat(r.path, estimator);
 }
 
 void sampler_print_info(FILE *fd)

@@ -20,7 +20,6 @@
 #include "sampler.h"
 #include "spectrum.h"
 #include "pointsampler.h"
-#include "reservoir.h"
 
 
 typedef struct sampler_t {} sampler_t;
@@ -30,17 +29,15 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-static void get_pixel_linear(const uint64_t index, pixel_t *q) {
-  pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
-}
-
 void sampler_create_path(path_t *path)
 {
-  pixel_t q;
+  int i, j;
+  float fi, fj;
 
-  get_pixel_linear(path->index, &q);
+  pointsampler_pixel_linear(path->index, &i, &j);
+  pointsampler_subpixel(i, j, &fi, &fj);
   path_init(path, path->index, 0);
-  path_set_pixel(path, q._i, q._j);
+  path_set_pixel(path, fi, fj);
 
   // random index to decorrelate lambda sampling of pointsampler of rand_halton
   // path->index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
@@ -48,12 +45,16 @@ void sampler_create_path(path_t *path)
   // extend path once to determine pixel on camera and first vertex (hitpoint)
   if(path_extend(path)) return;
 
+  md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
+  double pdf = md_hsum(path_pdf(path));
+  pointsampler_splat(path, md_2f(md_div(measurement, md_set1(pdf))));
+
   while(1) {
     // sample light source
     if(nee_sample(path)) break;
 
-    md_t measurement = path_measurement_contribution_dx(path, 0, path->length-1);
-    double pdf = md_hsum(path_pdf(path));
+    measurement = path_measurement_contribution_dx(path, 0, path->length-1);
+    pdf = md_hsum(path_pdf(path));
     pointsampler_splat(path, md_2f(md_div(measurement, md_set1(pdf))));
 
     // pop area sampled light vertex

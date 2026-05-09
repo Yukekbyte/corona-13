@@ -518,23 +518,28 @@ float path_shift_lambda(path_t *path, mf_t lambda) {
 }
 
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source) {
-  assert(source->length > 2);
+  if(source->length <= 2) return 0.0; // cannot shift when source path too short.
 
   *shifted = *source;
   shifted->sensor.pixel_i = pixel_i;
   shifted->sensor.pixel_j = pixel_j;
   shifted->sensor.pixel_set = 1;
 
-  view_cam_sample(shifted); // sets e[1].omega
+  view_cam_sample(shifted); // sets e[1].omega and v[1].pdf
 
+  // ratio of 1/A_aperture * A_sensor * G
+  // area probabilities cancel out
   float shifted_cam = mf(shifted->v[1].pdf, 0); // still in projected solid angle measure
   float source_cam = mf(view_cam_pdf(source, 0), 0);
-  float J = source_cam / shifted_cam;
+  volatile float J = source_cam / shifted_cam;
   int v = 1;
 
-  if(path_propagate(shifted, v, s_propagate_mutate)) 
+  // trace new camera ray from v=0 to v=1.
+  if(path_propagate(shifted, v, s_propagate_mutate))
     return 0.0; // propagation failed
 
+  // abort if mode is different (diffuse vs specular)
+  // or the perturbation falls on the envmap
   if(shifted->v[v].mode != source->v[v].mode) return 0.0;
   if(shifted->v[v].flags & s_environment) return 0.0;
 
@@ -608,7 +613,7 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   // }
   #endif
   
-  // project to reconnect at next vertex
+  // connect new hitpoint at next vertex
   if(path_project(shifted, v+1, s_propagate_mutate) ||
       (shifted->v[v+1].flags           != source->v[v+1].flags) ||
       (shifted->v[v+1].hit.shader      != source->v[v+1].hit.shader) ||
@@ -617,7 +622,12 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     return 0.0;
   }
 
+  // G1 ratio's
   J *= path_G(source, v) / path_G(shifted, v);
+
+  if(isinf(J)) {
+    return 0.0;
+  }
 
   return J;
 }

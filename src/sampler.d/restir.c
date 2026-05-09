@@ -34,13 +34,6 @@ typedef struct sampler_t {
   int spatial_reuse_passes;
 } sampler_t;
 
-// fractional part of float
-static inline float fractf(float x) { return x - (int)x; }
-
-static void get_pixel_linear(const uint64_t index, pixel_t *q) {
-  pointsampler_pixel_linear(index, &q->i, &q->j, &q->_i, &q->_j);
-}
-
 static inline reservoir_t* get_write_reservoir(pixel_t q) {
   if(rt.sampler->write == 1) 
     return &rt.sampler->reservoirsA[q.i][q.j];
@@ -88,15 +81,15 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     int dx = (int)(u * side) - d;
     int dy = (int)(v * side) - d;
 
-    int l = (int)q.i + dx;
-    int m = (int)q.j + dy;
+    int l = q.i + dx;
+    int m = q.j + dy;
 
     // Clamp to image bounds
     l = CLAMP(l, 0, (int)w - 1);
     m = CLAMP(m, 0, (int)h - 1);
 
     // Skip self
-    if((uint64_t)l == q.i && (uint64_t)m == q.j) {
+    if(l == q.i && m == q.j) {
       k++;
       continue;
     }
@@ -104,8 +97,8 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     // Skip duplicates
     int duplicate = 0;
     for(int i = 0; i < found; i++) {
-      if(qns[i].i == (uint64_t)l &&
-      qns[i].j == (uint64_t)m) {
+      if(qns[i].i == l &&
+      qns[i].j == m) {
         duplicate = 1;
         break;
       }
@@ -117,8 +110,8 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     }
 
     pixel_t *qn = &qns[found];
-    qn->i = (uint64_t)l;
-    qn->j = (uint64_t)m;
+    qn->i = l;
+    qn->j = m;
     reservoir_t *n = get_read_reservoir(*qn);
 
     // bias in checking sample value? what about envmaps?
@@ -137,8 +130,6 @@ static void random_neighbors(pixel_t q, const path_t *path, reservoir_t **ns, pi
     //     continue;
     //   }
     // }
-
-    pointsampler_subpixel(qn->i, qn->j, &qn->_i, &qn->_j);
 
     ns[found] = n;
     
@@ -196,7 +187,7 @@ sampler_t *sampler_init() {
 }
 
 void sampler_cleanup(sampler_t *s) {
-  uint64_t i, j;
+  int i, j;
   uint64_t w = view_width();
   uint64_t h = view_height();
   
@@ -216,7 +207,7 @@ void sampler_cleanup(sampler_t *s) {
 void sampler_prepare_sample(uint64_t index) {
   // get pixels linearly
   pixel_t q;
-  get_pixel_linear(index, &q);
+  pointsampler_pixel_linear(index, &q.i, &q.j);
   reservoir_t *r = get_write_reservoir(q);
 
   #if TEMPORAL_REUSE
@@ -225,11 +216,7 @@ void sampler_prepare_sample(uint64_t index) {
     new.path = &path;
     // Intial RIS
     ris(q, &new, NULL);
-
-    if(new.envmap)
-      r->envmap = 1; 
-    else // combine with temporal neighbour (previous reservoir)
-      combine_temporal(r, &new);
+    combine_temporal(r, &new);
 
   #else
     // Intial RIS
@@ -248,7 +235,7 @@ void sampler_switch_read_write_buffers() {
 void sampler_pass_sample(uint64_t index) {
   // get pixels with pointsampler sequence to avoid artifacts and race conditions
   pixel_t q;
-  get_pixel_linear(index, &q);
+  pointsampler_pixel_linear(index, &q.i, &q.j);
   reservoir_t *r = get_read_reservoir(q);
   reservoir_t *w = get_write_reservoir(q);
 
@@ -273,10 +260,11 @@ void sampler_clear(sampler_t *s) {}
 void sampler_create_path(path_t *path)
 {
   pixel_t q;
-  get_pixel_linear(path->index, &q);
+  pointsampler_pixel_linear(path->index, &q.i, &q.j);
   reservoir_t *r = get_read_reservoir(q);
-  // don't splat null sample and don't support envmaps
-  if(is_null(r->path) || r->envmap) return;
+
+  // don't splat null sample
+  if(is_null(r->path)) return;
 
   // estimator f(r.Y) * r.W
   const mf_t estimator = md_2f(md_mul(path_measurement_contribution_dx(r->path, 0, r->path->length-1), md_set1(r->W)));

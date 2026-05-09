@@ -92,7 +92,7 @@ float pointsampler_store(path_t *p, int v, int dim)
   return r;
 }
 
-void pointsampler_pixel_linear(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j)
+void pointsampler_pixel_linear(uint64_t index, int *x, int *y)
 {
   uint64_t width  = view_width();
   uint64_t height = view_height();
@@ -100,23 +100,22 @@ void pointsampler_pixel_linear(uint64_t index, uint64_t *x, uint64_t *y, float *
 
   uint64_t wrapped = index % total;
 
-  *x = wrapped % width;
-  *y = wrapped / width;
-
-  pointsampler_subpixel(*x, *y, pixel_i, pixel_j);
+  *x = (int)(wrapped % width);
+  *y = (int)(wrapped / width);
 }
 
-void pointsampler_pixel(uint64_t index, uint64_t *x, uint64_t *y, float *pixel_i, float *pixel_j)
+void pointsampler_pixel(uint64_t index, int *x, int *y)
 {
-  *x = (uint64_t)(halton_sample(&rt.pointsampler->h, s_dim_image_x, index)*view_width());
-  *y = (uint64_t)(halton_sample(&rt.pointsampler->h, s_dim_image_y, index)*view_height());
-
-  pointsampler_subpixel(*x, *y, pixel_i, pixel_j);
+  // halton sequence snapped to integer grid
+  *x = (int)(halton_sample(&rt.pointsampler->h, s_dim_image_x, index)*view_width());
+  *y = (int)(halton_sample(&rt.pointsampler->h, s_dim_image_y, index)*view_height());
 }
 
-void pointsampler_subpixel(uint64_t x, uint64_t y, float *pixel_i, float*pixel_j) {
-  *pixel_i = (float)x + 0.5f;
-  *pixel_j = (float)y + 0.5f;
+void pointsampler_subpixel(int x, int y, float *pixel_i, float*pixel_j) {
+  // random uniform within pixel
+  const int tid = common_get_threadid();
+  *pixel_i = (float)x + points_rand(rt.points, tid);
+  *pixel_j = (float)y + points_rand(rt.points, tid);
 }
 
 void pointsampler_splat(path_t *p, mf_t value)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pathspace.h"
+#include "pointsampler.h"
 #include "points.h"
 
 #define M 8
@@ -14,15 +15,15 @@ typedef struct reservoir_t {
   double w_sum; // sum of weights
   double c;     // confidence weight of output (= the amount of samples behind the output sample)
   double W;     // contribution weight: estimate for 1/p
-  uint8_t envmap;
 } reservoir_t;
 
 typedef struct pixel_t {
-  uint64_t i;
-  uint64_t j;
-  float _i;
-  float _j;
+  int i;
+  int j;
 } pixel_t;
+
+// fractional part of float
+static inline float fractf(float x) { return x - (int)x; }
 
 // Updates reservoir with sample and weight.
 static void update(reservoir_t *r, path_t *path, double weight, double c) {
@@ -37,7 +38,6 @@ static inline void reset(reservoir_t *r) {
   r->c = 0.;
   r->w_sum = 0.;
   r->W = 0.;
-  r->envmap = 0;
 }
 
 // Use the integrand f as target function p_hat
@@ -57,6 +57,15 @@ static inline mf_t sampler_mis(const path_t *p)
   return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
 }
 
+static void updater(reservoir_t *r, path_t *path) {
+  double phat = p_hat(path);
+  double pdf = md_hsum(path_pdf(path));
+  if(phat > 0. && pdf > 0.)
+    update(r, path, phat/pdf, 1.);
+  else
+    r->c += 1.;
+}
+
 typedef void (*splat_fn)(path_t*, mf_t);
 
 // Perform Resampled Importance Sampling (streaming RIS)
@@ -71,25 +80,22 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     uint32_t index = (uint32_t)(points_rand(rt.points, common_get_threadid()) * 4294967296.0f); // 2^32
     
     path_init(&path, index, 0);
-    path_set_pixel(&path, q._i, q._j);
-    //path_set_aperture(&path, 0, 0);
+    // anti aliasing
+    float i, j;
+    pointsampler_subpixel(q.i, q.j, &i, &j);
+    path_set_pixel(&path, i, j);
     
-    if(path_extend(&path)) break;
+    if(path_extend(&path)) assert(0);
 
-    if(path.v[path.length-1].flags & s_environment) 
-      r->envmap = 1; // indicator
+    // for light sources as hit point
+    updater(r, &path);
     
     // generate path tree
     while(1) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      double phat = p_hat(&path);
-      double pdf = md_hsum(path_pdf(&path));
-      if(phat > 0. && pdf > 0.)
-        update(r, &path, phat/pdf, 1.);
-      else
-        r->c += 1.;
+      updater(r, &path);
       
       // splat sample anyway
       mf_t mis = sampler_mis(&path); // Hero MIS, don't confuse this with the resampling weight MIS from above (which is 1/M)!
@@ -98,7 +104,10 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
       path_pop(&path);
       
       // extend path
-      if(path_extend(&path)) break;  
+      if(path_extend(&path)) {
+        r->c += 1.;
+        break;
+      }  
     }
   }
 
