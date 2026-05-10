@@ -4,6 +4,7 @@ basic_scenes/*/*.pfm
 basic_scenes/*/renders/*
 basic_scenes/*/renders-di/*
 basic_scenes/*/renders-gi/*
+basic_scenes/ris-box/
 regression/*.res
 regression/report.html
 regression/*/testrender_fb00.pfm
