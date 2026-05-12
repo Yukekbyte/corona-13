@@ -524,6 +524,7 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   shifted->sensor.pixel_i = pixel_i;
   shifted->sensor.pixel_j = pixel_j;
   shifted->sensor.pixel_set = 1;
+  shifted->sensor.aperture_set = 1;
 
   view_cam_sample(shifted); // sets e[1].omega and v[1].pdf
 
@@ -535,8 +536,13 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   int v = 1;
 
   // trace new camera ray from v=0 to v=1.
-  if(path_propagate(shifted, v, s_propagate_mutate))
+  if(path_propagate(shifted, v, s_propagate_sample))
     return 0.0; // propagation failed
+
+  // update shifted->v[v].mode
+  shifted->length = v+1;
+  shader_sample(shifted);
+  shifted->length = source->length;
 
   // abort if mode is different (diffuse vs specular)
   // or the perturbation falls on the envmap
@@ -613,12 +619,14 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   // }
   #endif
   
+  if(!path_visible(shifted, v+1)) return 0.0;
+
   // connect new hitpoint at next vertex
   if(path_project(shifted, v+1, s_propagate_mutate) ||
-      (shifted->v[v+1].flags           != source->v[v+1].flags) ||
-      (shifted->v[v+1].hit.shader      != source->v[v+1].hit.shader) ||
-      (shifted->v[v+1].interior.shader != source->v[v+1].interior.shader) ||
-      (primid_invalid(shifted->v[v+1].hit.prim) != primid_invalid(source->v[v+1].hit.prim))) {
+  (shifted->v[v+1].flags           != source->v[v+1].flags) ||
+  (shifted->v[v+1].hit.shader      != source->v[v+1].hit.shader) ||
+  (shifted->v[v+1].interior.shader != source->v[v+1].interior.shader) ||
+  (primid_invalid(shifted->v[v+1].hit.prim) != primid_invalid(source->v[v+1].hit.prim))) {
     return 0.0;
   }
 
