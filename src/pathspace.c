@@ -538,16 +538,17 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   // trace new camera ray from v=0 to v=1.
   if(path_propagate(shifted, v, s_propagate_sample))
     return 0.0; // propagation failed
-
+    
+  // the perturbation falls on the envmap
+  if(shifted->v[v].flags & s_environment) return 0.0;
+  
   // update shifted->v[v].mode
   shifted->length = v+1;
   shader_sample(shifted);
   shifted->length = source->length;
 
   // abort if mode is different (diffuse vs specular)
-  // or the perturbation falls on the envmap
   if(shifted->v[v].mode != source->v[v].mode) return 0.0;
-  if(shifted->v[v].flags & s_environment) return 0.0;
 
   #if 0
   while(!(shifted->v[v].mode & s_diffuse 

@@ -81,9 +81,9 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     
     path_init(&path, index, 0);
     // anti aliasing
-    float i, j;
-    pointsampler_subpixel(q.i, q.j, &i, &j);
-    path_set_pixel(&path, i, j);
+    float pixel_i, pixel_j;
+    pointsampler_subpixel(q.i, q.j, &pixel_i, &pixel_j);
+    path_set_pixel(&path, pixel_i, pixel_j);
     
     if(path_extend(&path)) assert(0);
 

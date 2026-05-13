@@ -189,13 +189,11 @@ static inline int nee_sample(path_t *p)
   // need to check visibility to new vertex, compute brdf and throughput:
   const mf_t bsdf = shader_brdf(p, v-1); // also set mode on vertex v-1
 
-  // comment out for restir
   if(!mf_any(mf_gt(bsdf, mf_set1(0.0f)))) { goto fail; } // check for specular materials.
 
   // determine side of surface and volume from that (brdf sets mode)
   if(path_edge_init_volume(p, v)) { goto fail; }
 
-  // comment out for restir
   if(!path_visible(p, v)) { goto fail; }
 
   shader_prepare(p, v);
