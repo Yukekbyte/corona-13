@@ -1,10 +1,4 @@
-basic_scenes/*/*.txt
-basic_scenes/*/*.png
-basic_scenes/*/*.pfm
-basic_scenes/*/renders/*
-basic_scenes/*/renders-di/*
-basic_scenes/*/renders-gi/*
-basic_scenes/ris-box/
+basic_scenes/*
 regression/*.res
 regression/report.html
 regression/*/testrender_fb00.pfm
