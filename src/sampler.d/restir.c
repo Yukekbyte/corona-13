@@ -23,7 +23,7 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 3
+#define SPATIAL_REUSE_PASSES 4
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
@@ -217,7 +217,6 @@ void sampler_prepare_sample(uint64_t index) {
     // Intial RIS
     ris(q, &new, NULL);
     combine_temporal(r, &new);
-
   #else
     // Intial RIS
     ris(q, r, NULL);

@@ -126,6 +126,7 @@ static inline int camera_write_humanly_readable(const camera_t *cam, const char 
 
     fprintf(f, "pos_world = (%f, %f, %f)\n",cam->pos[0], cam->pos[1], cam->pos[2]);
     fprintf(f, "lookat = (%f, %f, %f)\n", cam->pos[0] + hit.n[0], cam->pos[1] + hit.n[1], cam->pos[2] + hit.n[2]);
+    fprintf(f, "n = (%f, %f, %f)\n", hit.n[0], hit.n[1], hit.n[2]);
     fprintf(f, "up = (%f, %f, %f)\n", hit.b[0], hit.b[1], hit.b[2]);
 
     fprintf(f, "frame_orientation w = %f, X = (%f, %f, %f)\n", cam->orient.w, cam->orient.x[0], cam->orient.x[1], cam->orient.x[2]);

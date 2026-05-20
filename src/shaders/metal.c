@@ -233,7 +233,7 @@ mf_t sample(path_t *p, void* data)
       - dotproduct(p->v[v].hit.a, p->e[v].omega),
       - dotproduct(p->v[v].hit.b, p->e[v].omega),
       - dotproduct(p->v[v].hit.n, p->e[v].omega)};
-    ggx_sample_h(wit, r, r, pointsampler(p, s_dim_omega_x), pointsampler(p, s_dim_omega_y), ht);
+    ggx_sample_h(wit, r, r, pointsampler_store(p, v, s_dim_omega_x), pointsampler_store(p, v, s_dim_omega_y), ht);
     // world space:
     for(int k=0;k<3;k++) h[k] = ht[0]*p->v[v].hit.a[k] + ht[1]*p->v[v].hit.b[k] + ht[2]*n[k];
     pdf_h = ggx_pdf_h(p->e[v].omega, h, n, r);

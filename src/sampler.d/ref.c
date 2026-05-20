@@ -30,6 +30,15 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
+static inline mf_t sampler_mis(const path_t *p) 
+{
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
+
 void sampler_create_path(path_t *path)
 {
   int i, j;
@@ -57,6 +66,8 @@ void sampler_create_path(path_t *path)
     measurement = path_measurement_contribution_dx(path, 0, path->length-1);
     pdf = md_hsum(path_pdf(path));
     pointsampler_splat(path, md_2f(md_div(measurement, md_set1(pdf))));
+    // mf_t w = sampler_mis(path);
+    // pointsampler_splat(path, mf_mul(path->throughput, w));
 
     // pop area sampled light vertex
     path_pop(path);

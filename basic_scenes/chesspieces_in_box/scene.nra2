@@ -1,6 +1,6 @@
 black # no env map
 
-24
+28
 
 diffuse # 0
 color d 0.7 0.7 0.7 # 1
@@ -35,6 +35,12 @@ dielectric 0.9 23 # 21
 color g 1 0.2 0.2 0.04 # 22
 mult 1 22 21 # 23 knight
 
+color d 0.01 0.3 0.01 1.0 # 24
+mult 1 24 0 # 25
+
+color d 0.0 0.7 0.0 1.0 # 26
+mult 1 26 0 # 27
+
 12
 2 geo/bottom_panel
 2 geo/top_panel
@@ -42,9 +48,9 @@ mult 1 22 21 # 23 knight
 12 geo/left_panel
 10 geo/right_panel
 5 geo/central_light
-2 geo/cube
-2 geo/long_cube
-12 geo/pawn
-10 geo/knight # 10 # 23
-14 geo/rook # 14 # 8
-12 geo/bishop # 12 # 20
+27 geo/cube
+25 geo/long_cube
+27 geo/pawn
+25 geo/knight # 10 # 23
+8 geo/rook # 14 # 8
+25 geo/bishop # 12 # 20

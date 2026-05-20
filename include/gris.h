@@ -7,8 +7,8 @@
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
 #define PAIRWISE_COMBINE 1
 #define TEMPORAL_REUSE 0
-#define LAMBDA_OFFSET 123.0f // is a float
-#define CONFIDENCE_CAP 20. // is a double
+#define LAMBDA_OFFSET 20.0f // is a float
+#define CONFIDENCE_CAP 200. // is a double
 
 float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
   if(is_null(source_path)) {
@@ -62,8 +62,7 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
 #if PAIRWISE_COMBINE
   // Combine, but with only two reservoirs
   static void combine_pair(reservoir_t *s, pixel_t qs, reservoir_t *r, pixel_t qr) {
-    // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
-    if(s == r) { printf("tried to combine reservoir with itself\n"); return; } 
+    assert(s != r);
 
     // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
     if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
@@ -107,6 +106,8 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
   // Combine multiple reservoirs in r
   // The samples in x[] (x[i]->path) will be shifted to q.
   static void combine(reservoir_t *r, pixel_t q, reservoir_t *x[], pixel_t qs[]) {
+    // I suppose we could assert that the reservoirs are different here as well...
+
     for(int i = 0; i < K; i++) {
       // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
       if(x[i]->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
@@ -171,8 +172,7 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
   // Assumes s and r come from the same domain (pixel)
   // Spectral shifts the sample in s.
   static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
-    // don't combine reservoir with itself (happens when random_neighbor fails and returns its own reservoir)
-    if(s == r) { printf("tried to combine reservoir with itself (temporal)\n"); return; } 
+    assert(s != r);
 
     // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
     if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs (temporal)\n"); return; }
@@ -181,9 +181,9 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
     float Js = shift_lambda(s->path, 0);
 
     // MIS weights
-    volatile double cphats = s->c * p_hat(s->path) * Js;
-    volatile double cphatr = r->c * p_hat(r->path);
-    volatile double total = cphats + cphatr;
+    double cphats = s->c * p_hat(s->path) * Js;
+    double cphatr = r->c * p_hat(r->path);
+    double total = cphats + cphatr;
 
     if(total == 0) {
       // fast exit
@@ -191,19 +191,12 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
       return;
     }
 
-    volatile double sc = s->c;
-    volatile double rc = r->c;
-    volatile double mis_s = s->c / (r->c + s->c); //cphats / total;
-    volatile double mis_r = r->c / (r->c + s->c); //cphatr / total;
-    assert(mis_r == mis_r);
-    assert(mis_s == mis_s);
-    assert(mis_r >= 0.);
-    assert(mis_s >= 0.);
-    assert(fabs(mis_s + mis_r - 1.0) < 0.001 );
+    double mis_s = s->c / (r->c + s->c); //cphats / total;
+    double mis_r = r->c / (r->c + s->c); //cphatr / total;
 
     // resampling weights
-    volatile double w_r = mis_r * p_hat(r->path) * r->W;
-    volatile double w_s = mis_s * p_hat(s->path) * s->W * Js;
+    double w_r = mis_r * p_hat(r->path) * r->W;
+    double w_s = mis_s * p_hat(s->path) * s->W * Js;
 
     // combine reservoirs in s
     s->w_sum = w_s;

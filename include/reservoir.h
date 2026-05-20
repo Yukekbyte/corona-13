@@ -4,7 +4,7 @@
 #include "pointsampler.h"
 #include "points.h"
 
-#define M 8
+#define M 4
 
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)

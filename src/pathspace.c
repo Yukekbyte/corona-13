@@ -518,7 +518,7 @@ float path_shift_lambda(path_t *path, mf_t lambda) {
 }
 
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source) {
-  if(source->length <= 2) return 0.0; // cannot shift when source path too short.
+  assert(source->length >= 2); // cannot shift when source path too short.
 
   *shifted = *source;
   shifted->sensor.pixel_i = pixel_i;
@@ -526,102 +526,95 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
   shifted->sensor.pixel_set = 1;
   shifted->sensor.aperture_set = 1;
 
-  view_cam_sample(shifted); // sets e[1].omega and v[1].pdf
-
-  // ratio of 1/A_aperture * A_sensor * G
-  // area probabilities cancel out
-  float shifted_cam = mf(shifted->v[1].pdf, 0); // still in projected solid angle measure
-  float source_cam = mf(view_cam_pdf(source, 0), 0);
-  volatile float J = source_cam / shifted_cam;
+  float J = 1.0;
   int v = 1;
 
+  // update sensor of shifted
+  view_cam_sample(shifted); // sets e[1].omega and v[1].pdf
+  
   // trace new camera ray from v=0 to v=1.
   if(path_propagate(shifted, v, s_propagate_sample))
     return 0.0; // propagation failed
-    
-  // the perturbation falls on the envmap
+
+  // reject envmap hits
   if(shifted->v[v].flags & s_environment) return 0.0;
+
   
-  // update shifted->v[v].mode
-  shifted->length = v+1;
-  shader_sample(shifted);
-  shifted->length = source->length;
-
-  // abort if mode is different (diffuse vs specular)
-  if(shifted->v[v].mode != source->v[v].mode) return 0.0;
-
-  #if 0
-  while(!(shifted->v[v].mode & s_diffuse 
-          && source_path->v[v].mode & s_diffuse
-          && source_path->v[v+1].mode & (s_diffuse | s_emit))) { // or s_emit!
-
-    // part below doesn't work yet
-    return 0.0f;
-
-    if(v+1 == source_path->length) {
-      // no consecutive rough vertices...
-      return 0.0;
-    }
-
+  // Jacobian is ratio of PDFs
+  // area pdf = cam pdf * G
+  // cam pdf is 1/A_aperture * A_sensor * G_cam (area probabilities actually cancel out here)
+  float pdf_shifted = mf(shifted->v[1].pdf, 0) * path_G(shifted, v); // v[1].pdf is still in project solid angle measure
+  float pdf_source = mf(view_cam_pdf(source, 0), 0) * path_G(source, v);
+  if(pdf_shifted == 0.0) return 0.0;
+  J *= pdf_source / pdf_shifted;
+  
+  // don't bother with short paths
+  if(source->length == 2) return J;
+  
+  while(1) {
     // random replay
     float rx, ry, r_mode;
-    rx = ry = r_mode = 0.0;
-
-    if(shifted->v[v].mode & s_specular) {
-      // for specular bounces, omega is deterministic, so random numbers don't matter...
-      rx = pointsampler(shifted, s_dim_omega_x);
-      ry = pointsampler(shifted, s_dim_omega_y);
-      r_mode = pointsampler(shifted, s_dim_scatter_mode);
-    } 
-    else {
-      rx = source_path->v[v].rands.omega_x;
-      ry = source_path->v[v].rands.omega_y;
-      r_mode = source_path->v[v].rands.scatter_mode;
+    rx = source->v[v].rands.omega_x;
+    ry = source->v[v].rands.omega_y;
+    r_mode = source->v[v].rands.scatter_mode;
       
-      if(rx == 0.0 && ry == 0.0 && r_mode == 0.0) {
+    if(rx == 0.0 && ry == 0.0 && r_mode == 0.0) {
+      if(!(shifted->v[v+1].tech & s_tech_nee)) {
+        // next vertex wasn't area sampled, the bsdf shader doesn't store random numbers
         printf("Shader doesn't support random replay\n");
-        return 0.0; // this shader doesn't store random numbers:(
+        return 0.0;
+      } else {
+        rx = pointsampler(shifted, s_dim_omega_x);
+        ry = pointsampler(shifted, s_dim_omega_y);
+        r_mode = pointsampler(shifted, s_dim_scatter_mode);
       }
     }
-
+      
     pointsampler_enable_fake_random(rt.pointsampler);
     pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_x, rx);
     pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_y, ry);
     pointsampler_set_fake_random(rt.pointsampler, s_dim_scatter_mode, r_mode);
     
-    int original_length = shifted->length;
     shifted->length = v+1;
     shader_sample(shifted); 
-    shifted->length = original_length;
+    shifted->length = source->length;
     
     pointsampler_disable_fake_random(rt.pointsampler);
+
+    // abort if mode is different (diffuse vs specular vs glossy ...)
+    // also rejects reflect <-> transmit transitions (non-invertible)
+    if(shifted->v[v].mode != source->v[v].mode) return 0.0;
+
+    // if hit is diffuse and next vertex (still from source) is also diffuse, break random replay and reconnect
+    if(shifted->v[v].mode & s_diffuse && source->v[v+1].mode & (s_diffuse | s_emit)) break;
+
+    // if we're out of vertices, try reconnection anyway, although not diffuse
+    if(v+1 == source->length-1) break;
+
+    // propagate path further
+    if(path_propagate(shifted, v+1, s_propagate_sample)) return 0.0;
     
-    // In a pure random replay shift, the Jacobian is the ratio of PDFs
-    float pdf_source = mf(shader_pdf(source_path, v), 0);
-    float pdf_shifted = mf(shader_pdf(shifted, v), 0);
+    // reject envmap hits
+    if(shifted->v[v+1].flags & s_environment) return 0.0;
+
+    // the Jacobian is the ratio of PDFs
+    // area pdf = shader pdf * G
+    float pdf_source = mf(shader_pdf(source, v), 0) * path_G(source, v+1);
+    float pdf_shifted = mf(shader_pdf(shifted, v), 0) * path_G(shifted, v+1);
+
     if(pdf_shifted <= 0.0f) return 0.0f;
-    //printf("pdf_source %f, pdf_shifted %f | source / shifted %f\n", pdf_source, pdf_shifted, pdf_source / pdf_shifted);
     J *= (pdf_source / pdf_shifted);
     
-    if(path_propagate(shifted, v+1, s_propagate_mutate)) return 0.0;
     v++;
-
-    // specular vertex must stay specular, diffuse must stay diffuse
-    // also rejects reflect <-> transmit transitions (non-invertible)
-    if(shifted->v[v].mode != source_path->v[v].mode) return 0.0;
-
-    // reject envmap hits
-    if(shifted->v[v].flags & s_environment) return 0.0;
   }
-
 
   // if(v > 1) {
   //   printf("Did %d bounces before reconnecting with Jacobian up until that point = %f\n", v, J);
   // }
-  #endif
+
   
   if(!path_visible(shifted, v+1)) return 0.0;
-
+  
   // connect new hitpoint at next vertex
   if(path_project(shifted, v+1, s_propagate_mutate) ||
   (shifted->v[v+1].flags           != source->v[v+1].flags) ||
@@ -631,8 +624,7 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     return 0.0;
   }
 
-  // G1 ratio's
-  J *= path_G(source, v) / path_G(shifted, v);
+  //J *= path_G(source, v) / path_G(shifted, v);
 
   if(isinf(J)) {
     return 0.0;

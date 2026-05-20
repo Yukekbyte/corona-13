@@ -259,7 +259,7 @@ view_t *view_init()
 
   // default to 1k 16:9 render
   v->width = 1024;
-  v->height = 576;
+  v->height = 1024; //576;
 
   // parse command line args
   const char *cam_file = 0;      // camera file to load
