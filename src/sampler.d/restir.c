@@ -215,11 +215,11 @@ void sampler_prepare_sample(uint64_t index) {
     path_t path;
     new.path = &path;
     // Intial RIS
-    ris(q, &new, NULL);
+    ris(q, &new);
     combine_temporal(r, &new);
   #else
     // Intial RIS
-    ris(q, r, NULL);
+    ris(q, r);
   #endif
 }
 
