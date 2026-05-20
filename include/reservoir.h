@@ -48,16 +48,7 @@ static double p_hat(path_t *path) {
   return md_hsum(f);
 }
 
-static inline mf_t sampler_mis(const path_t *p) 
-{
-  md_t pdf = md_set1(1.0);
-  for(int v=1;v<p->length;v++)
-    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
-
-  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-}
-
-static void updater(reservoir_t *r, path_t *path) {
+static void fast_update(reservoir_t *r, path_t *path) {
   double phat = p_hat(path);
   double pdf = md_hsum(path_pdf(path));
   if(phat > 0. && pdf > 0.)
@@ -66,11 +57,9 @@ static void updater(reservoir_t *r, path_t *path) {
     r->c += 1.;
 }
 
-typedef void (*splat_fn)(path_t*, mf_t);
-
 // Perform Resampled Importance Sampling (streaming RIS)
 // r will be reset and filled with initial samples for pixel q
-static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
+static void ris(pixel_t q, reservoir_t *r) {
   reset(r);
 
   for(int i = 0; i < M; i++) {
@@ -88,18 +77,14 @@ static void ris(pixel_t q, reservoir_t *r, splat_fn splat_cb) {
     if(path_extend(&path)) assert(0);
 
     // for light sources as hit point
-    updater(r, &path);
+    fast_update(r, &path);
     
     // generate path tree
     while(1) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      updater(r, &path);
-      
-      // splat sample anyway
-      mf_t mis = sampler_mis(&path); // Hero MIS, don't confuse this with the resampling weight MIS from above (which is 1/M)!
-      if(splat_cb) splat_cb(&path, mf_mul(path.throughput, mis));
+      fast_update(r, &path);
       
       path_pop(&path);
       
