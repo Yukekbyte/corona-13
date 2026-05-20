@@ -493,30 +493,101 @@ void path_reverse(path_t *path, const path_t *input)
 }
 
 float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
-  // assume last vertex area light sampled
+  assert(source->length >= 2);
 
   *shifted = *source;
-
-  // evaluate pdf of inner vertices (cam pdf, light source pdf and G terms cancel out)
-  float old_pdf = 1.0;
-  for(int v=2;v<source->length-1;v++)
-    old_pdf *= mf(shader_pdf(source, v-1), 0);
-
-  if(old_pdf == 0.0) return 0.0;
-
   shifted->lambda = lambda;
 
-  for(int v = 1; v < shifted->length; v++)
-    shader_prepare(shifted, v);
+  float pdf_source;
+  float pdf_shifted;
+  float J = 1.0;
+  int v = 1; // skip camera vertex (not specular)
 
-  // evaluate pdf of inner vertices with new lambda
-  float new_pdf = 1.0;
-  for(int v=2;v<shifted->length-1;v++)
-    new_pdf *= mf(shader_pdf(shifted, v-1), 0);
+  if(source->length == 2) return J;
 
-  if(new_pdf == 0.0) return 0.0;
+  while(1) {
+    
+    // no perturbations for diffuse vertices
+    while(shifted->v[v].mode & s_diffuse) {
+      shader_prepare(shifted, v);
+      pdf_source = mf(shader_pdf(source, v), 0) * path_G(source, v+1);
+      pdf_shifted = mf(shader_pdf(shifted, v), 0) * path_G(shifted, v+1);
+      if(pdf_shifted <= 0.0) return 0.0;
+      J *= pdf_source / pdf_shifted;
+      if(v+1 == shifted->length-1) return J;
+      v++;
+    }
 
-  return new_pdf / old_pdf; // is 1 for direct lighting
+    // found glossy/specular vertex sequence
+    while(1) {
+      // random replay
+      float rx, ry, r_mode;
+      rx = source->v[v].rands.omega_x;
+      ry = source->v[v].rands.omega_y;
+      r_mode = source->v[v].rands.scatter_mode;
+      
+      if(rx == 0.0 && ry == 0.0 && r_mode == 0.0) {
+        if(!(shifted->v[v+1].tech & s_tech_nee)) {
+          // next vertex wasn't area sampled, the bsdf shader doesn't store random numbers
+          printf("Shader doesn't support random replay\n");
+          return 0.0;
+        } else {
+          rx = pointsampler(shifted, s_dim_omega_x);
+          ry = pointsampler(shifted, s_dim_omega_y);
+          r_mode = pointsampler(shifted, s_dim_scatter_mode);
+        }
+      }
+      
+      pointsampler_enable_fake_random(rt.pointsampler);
+      pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_x, rx);
+      pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_y, ry);
+      pointsampler_set_fake_random(rt.pointsampler, s_dim_scatter_mode, r_mode);
+      
+      shifted->length = v+1;
+      shader_sample(shifted); 
+      shifted->length = source->length;
+      
+      pointsampler_disable_fake_random(rt.pointsampler);
+      
+      // abort if mode is different (diffuse vs specular vs glossy ...)
+      // also rejects reflect <-> transmit transitions (non-invertible)
+      if(shifted->v[v].mode != source->v[v].mode) return 0.0;
+      
+      // if hit is diffuse and next vertex (still from source) is also diffuse, break random replay and reconnect
+      if(shifted->v[v].mode & s_diffuse && source->v[v+1].mode & (s_diffuse | s_emit)) break;
+      
+      // if we're out of vertices, try reconnection anyway, although not diffuse
+      if(v+1 == source->length-1) break;
+      
+      // propagate path further
+      if(path_propagate(shifted, v+1, s_propagate_sample)) return 0.0;
+      
+      // reject envmap hits
+      if(shifted->v[v+1].flags & s_environment) return 0.0;
+      
+      // the Jacobian is the ratio of PDFs
+      // area pdf = shader pdf * G
+      pdf_source = mf(shader_pdf(source, v), 0) * path_G(source, v+1);
+      pdf_shifted = mf(shader_pdf(shifted, v), 0) * path_G(shifted, v+1);
+      
+      if(pdf_shifted <= 0.0f) return 0.0f;
+      J *= (pdf_source / pdf_shifted);
+      
+      v++;
+    }
+
+    if(!path_visible(shifted, v+1)) return 0.0;
+    
+    // connect new hitpoint at next diffuse vertex
+    if(path_project(shifted, v+1, s_propagate_mutate) ||
+    (shifted->v[v+1].flags           != source->v[v+1].flags) ||
+    (shifted->v[v+1].hit.shader      != source->v[v+1].hit.shader) ||
+    (shifted->v[v+1].interior.shader != source->v[v+1].interior.shader) ||
+    (primid_invalid(shifted->v[v+1].hit.prim) != primid_invalid(source->v[v+1].hit.prim))) {
+      return 0.0;
+    }
+
+  }
 }
 
 float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source) {
@@ -540,7 +611,6 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
 
   // reject envmap hits
   if(shifted->v[v].flags & s_environment) return 0.0;
-
   
   // Jacobian is ratio of PDFs
   // area pdf = cam pdf * G
@@ -609,11 +679,6 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     
     v++;
   }
-
-  // if(v > 1) {
-  //   printf("Did %d bounces before reconnecting with Jacobian up until that point = %f\n", v, J);
-  // }
-
   
   if(!path_visible(shifted, v+1)) return 0.0;
   
@@ -626,11 +691,7 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     return 0.0;
   }
 
-  //J *= path_G(source, v) / path_G(shifted, v);
-
-  if(isinf(J)) {
-    return 0.0;
-  }
+  if(isinf(J)) return 0.0;
 
   return J;
 }
