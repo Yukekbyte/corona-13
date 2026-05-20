@@ -299,10 +299,10 @@ void path_reverse(path_t *path, const path_t *input);
 
 // assign path the new wavelength lambda.
 // evaluates the shaders again and returns the jacobian pdf_old / pdf_new.
-float path_shift_lambda(path_t *path, mf_t lambda);
+float path_shift_lambda(path_t *path, mf_t lambda, const path_t *source);
 
 // create a shifted path that starts in (pixel_i, pixel_j) on the sensor and propagates the changes until v[end]. The vertices from v[end+1] on are from source_path.
-float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source_path);
+float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *source);
 
 // connect two paths, extending path1 by a connection edge and the reverse of path2.
 mf_t path_connect(path_t *path1, const path_t *path2);

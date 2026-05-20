@@ -6,7 +6,7 @@
 #define K (NEIGHBOUR_COUNT + 1)
 #define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
 #define PAIRWISE_COMBINE 1
-#define TEMPORAL_REUSE 0
+#define TEMPORAL_REUSE 1
 #define LAMBDA_OFFSET 20.0f // is a float
 #define CONFIDENCE_CAP 200. // is a double
 
@@ -150,20 +150,20 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
 
 
 #if TEMPORAL_REUSE
-  float shift_lambda(path_t *path, uint8_t invert) {
-    if(is_null(path)) return 0.0;
+  float shift_lambda(path_t *shifted, path_t *source, uint8_t invert) {
+    if(is_null(source)) return 0.0;
 
     const float range = spectrum_sample_max - spectrum_sample_min;
     float offset = invert ? -LAMBDA_OFFSET : LAMBDA_OFFSET;
 
     // shift lambdas with offset and wrap around the wavelengths that exceed spectrum_sample_max
-    mf_t new_lambda = mf_add(path->lambda, mf_set1(offset));
+    mf_t new_lambda = mf_add(source->lambda, mf_set1(offset));
     mf_t mask = mf_gt(new_lambda, mf_set1(spectrum_sample_max));
     new_lambda = mf_select(mf_sub(new_lambda, mf_set1(range)), new_lambda, mask);
 
-    float J = path_shift_lambda(path, new_lambda);
+    float J = path_shift_lambda(shifted, new_lambda, source);
 
-    if(J == 0.0) set_null(path);
+    if(J == 0.0) set_null(shifted);
 
     return J;
   }
@@ -178,7 +178,8 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
     if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs (temporal)\n"); return; }
     
     // Shift lambda of s, should be deterministic
-    float Js = shift_lambda(s->path, 0);
+    path_t s_path_lambda;
+    float Js = shift_lambda(&s_path_lambda, s->path, 0);
 
     // MIS weights
     double cphats = s->c * p_hat(s->path) * Js;

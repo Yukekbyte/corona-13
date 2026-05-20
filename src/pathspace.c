@@ -492,25 +492,27 @@ void path_reverse(path_t *path, const path_t *input)
   // assert(fabs(f1 - f2) < 1e-1f*fmax(f1, f2));
 }
 
-float path_shift_lambda(path_t *path, mf_t lambda) {
+float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
   // assume last vertex area light sampled
+
+  *shifted = *source;
 
   // evaluate pdf of inner vertices (cam pdf, light source pdf and G terms cancel out)
   float old_pdf = 1.0;
-  for(int v=2;v<path->length-1;v++)
-    old_pdf *= mf(shader_pdf(path, v-1), 0);
+  for(int v=2;v<source->length-1;v++)
+    old_pdf *= mf(shader_pdf(source, v-1), 0);
 
   if(old_pdf == 0.0) return 0.0;
 
-  path->lambda = lambda;
+  shifted->lambda = lambda;
 
-  for(int v = 1; v < path->length; v++)
-    shader_prepare(path, v);
+  for(int v = 1; v < shifted->length; v++)
+    shader_prepare(shifted, v);
 
   // evaluate pdf of inner vertices with new lambda
   float new_pdf = 1.0;
-  for(int v=2;v<path->length-1;v++)
-    new_pdf *= mf(shader_pdf(path, v-1), 0);
+  for(int v=2;v<shifted->length-1;v++)
+    new_pdf *= mf(shader_pdf(shifted, v-1), 0);
 
   if(new_pdf == 0.0) return 0.0;
 

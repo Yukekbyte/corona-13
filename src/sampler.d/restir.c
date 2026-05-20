@@ -23,7 +23,7 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 4
+#define SPATIAL_REUSE_PASSES 0
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
