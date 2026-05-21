@@ -23,7 +23,6 @@
 #include "reservoir.h"
 #include "gris.h"
 
-#define SPATIAL_REUSE_PASSES 0
 
 // Reservoir-based Spatio-Temporal Importance Resampling (ReSTIR)
 
@@ -208,18 +207,16 @@ void sampler_prepare_sample(uint64_t index) {
   // get pixels linearly
   pixel_t q;
   pointsampler_pixel_linear(index, &q.i, &q.j);
-  reservoir_t *r = get_write_reservoir(q);
+  reservoir_t *w = get_write_reservoir(q);
+  
+  // Intial RIS
+  ris(q, w);
 
   #if TEMPORAL_REUSE
-    reservoir_t new;
-    path_t path;
-    new.path = &path;
-    // Intial RIS
-    ris(q, &new);
-    combine_temporal(r, &new);
-  #else
-    // Intial RIS
-    ris(q, r);
+    // stale samples are in read buffer
+    reservoir_t *r = get_read_reservoir(q);
+    if(r->c > 0)
+      spectral_combine(w, r);
   #endif
 }
 

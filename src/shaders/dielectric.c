@@ -263,7 +263,9 @@ mf_t sample(path_t *p, void* data)
       - dotproduct(p->v[v].hit.a, p->e[v].omega),
       - dotproduct(p->v[v].hit.b, p->e[v].omega),
       cos_in};
-    ggx_sample_h(wit, r, r, pointsampler_store(p, v, s_dim_omega_x), pointsampler_store(p, v, s_dim_omega_y), ht);
+    float omega_x = pointsampler_store(p, v, s_dim_omega_x);
+    float omega_y = pointsampler_store(p, v, s_dim_omega_y);
+    ggx_sample_h(wit, r, r, omega_x, omega_y, ht);
     // world space:
     for(int k=0;k<3;k++) h[k] = ht[0]*p->v[v].hit.a[k] + ht[1]*p->v[v].hit.b[k] + ht[2]*n[k];
     pdf_h = ggx_pdf_h(p->e[v].omega, h, n, r);

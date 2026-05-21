@@ -2,13 +2,6 @@
 
 #include "reservoir.h"
 
-#define NEIGHBOUR_COUNT 10
-#define K (NEIGHBOUR_COUNT + 1)
-#define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-#define PAIRWISE_COMBINE 1
-#define TEMPORAL_REUSE 1
-#define LAMBDA_OFFSET 20.0f // is a float
-#define CONFIDENCE_CAP 200. // is a double
 
 float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
   if(is_null(source_path)) {
@@ -150,11 +143,14 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
 
 
 #if TEMPORAL_REUSE
-  float shift_lambda(path_t *shifted, path_t *source, uint8_t invert) {
-    if(is_null(source)) return 0.0;
+  float spectral_shift(path_t *shifted, path_t *source, uint8_t invert) {
+    if(is_null(source)) {
+      set_null(shifted);
+      return 0.0;
+    }
 
     const float range = spectrum_sample_max - spectrum_sample_min;
-    float offset = invert ? -LAMBDA_OFFSET : LAMBDA_OFFSET;
+    float offset = invert ? -LAMBDA_OFFSET : LAMBDA_OFFSET; //(rt.points, common_get_threadid()) * range;
 
     // shift lambdas with offset and wrap around the wavelengths that exceed spectrum_sample_max
     mf_t new_lambda = mf_add(source->lambda, mf_set1(offset));
@@ -168,48 +164,29 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
     return J;
   }
 
-  // Combine reservoir s with r.
-  // Assumes s and r come from the same domain (pixel)
-  // Spectral shifts the sample in s.
-  static void combine_temporal(reservoir_t *s, const reservoir_t *r) {
+  void spectral_combine(reservoir_t *s, reservoir_t *r) {
     assert(s != r);
 
-    // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
-    if(s->c <= 0. && r->c <= 0.) { printf("tried to combine empty reservoirs (temporal)\n"); return; }
-    
-    // Shift lambda of s, should be deterministic
-    path_t s_path_lambda;
-    float Js = shift_lambda(&s_path_lambda, s->path, 0);
+    if(s->c <= 0. && r->c <= 0.) { printf("Tried to combine empty reservoirs (temporal)\n"); return; }
 
-    // MIS weights
-    double cphats = s->c * p_hat(s->path) * Js;
-    double cphatr = r->c * p_hat(r->path);
-    double total = cphats + cphatr;
+    path_t rlambda;
+    float Jr = spectral_shift(&rlambda, r->path, 0);
+    double mis_r, mis_s;
 
-    if(total == 0) {
-      // fast exit
-      s->c += r->c;
-      return;
-    }
+    mis_r = 0.5;
+    mis_s = 0.5;
 
-    double mis_s = s->c / (r->c + s->c); //cphats / total;
-    double mis_r = r->c / (r->c + s->c); //cphatr / total;
+    double w_r = mis_r * p_hat(&rlambda) * r->W * Jr;
+    double w_s = mis_s * p_hat(s->path) * s->W;
 
-    // resampling weights
-    double w_r = mis_r * p_hat(r->path) * r->W;
-    double w_s = mis_s * p_hat(s->path) * s->W * Js;
-
-    // combine reservoirs in s
     s->w_sum = w_s;
-    update(s, r->path, w_r, r->c);
+    update(s, &rlambda, w_r, r->c);
 
-    // update estimator
     if(not_null(s->path))
       s->W = s->w_sum / p_hat(s->path);
     else
       s->W = 0.;
-    
-    // confidence capping
+
     if(s->c > CONFIDENCE_CAP) s->c = CONFIDENCE_CAP;
   }
 #endif

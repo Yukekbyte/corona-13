@@ -42,9 +42,9 @@ mult 1 22 21 # 23 knight
 12 geo/left_panel
 10 geo/right_panel
 5 geo/central_light
-2 geo/cube
+2 geo/cube.001
 2 geo/long_cube
 12 geo/pawn
-10 geo/knight # 10 # 23
-14 geo/rook # 14 # 8
-12 geo/bishop # 12 # 20
+23 geo/knight.001 # 10 # 23
+8 geo/rook.001 # 14 # 8
+20 geo/bishop.001 # 12 # 20

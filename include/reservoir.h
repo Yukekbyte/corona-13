@@ -5,7 +5,16 @@
 #include "points.h"
 
 #define M 4
+#define TEMPORAL_REUSE 1
+#define SPATIAL_REUSE_PASSES 3
 
+#define NEIGHBOUR_COUNT 4
+#define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
+#define PAIRWISE_COMBINE 1
+#define LAMBDA_OFFSET 170.0f // is a float
+#define CONFIDENCE_CAP 200. // is a double
+
+#define K (NEIGHBOUR_COUNT + 1)
 #define set_null(path) ((path)->length = -1)
 #define is_null(path) ((path)->length == -1)
 #define not_null(path) ((path)->length != -1)
@@ -48,7 +57,16 @@ static double p_hat(path_t *path) {
   return md_hsum(f);
 }
 
-static void fast_update(reservoir_t *r, path_t *path) {
+static inline mf_t sampler_mis(const path_t *p) 
+{
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
+
+static void ris_update(reservoir_t *r, path_t *path) {
   double phat = p_hat(path);
   double pdf = md_hsum(path_pdf(path));
   if(phat > 0. && pdf > 0.)
@@ -77,14 +95,14 @@ static void ris(pixel_t q, reservoir_t *r) {
     if(path_extend(&path)) assert(0);
 
     // for light sources as hit point
-    fast_update(r, &path);
+    ris_update(r, &path);
     
     // generate path tree
     while(1) {
       // sample light source
       if(nee_sample(&path)) break; // breaks when envmap is hit or path becomes too long
 
-      fast_update(r, &path);
+      ris_update(r, &path);
       
       path_pop(&path);
       
@@ -103,5 +121,7 @@ static void ris(pixel_t q, reservoir_t *r) {
   // update contribution weight W (= estimator for 1/p(r.Y)), only fails if all M samples were 0 samples
   if(not_null(r->path)) {
     r->W = r->w_sum / p_hat(r->path);
-  } 
+  }
+
+  if(r->c >= CONFIDENCE_CAP) r->c = CONFIDENCE_CAP;
 }

@@ -498,27 +498,21 @@ float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
   *shifted = *source;
   shifted->lambda = lambda;
 
-  float pdf_source;
-  float pdf_shifted;
   float J = 1.0;
-  int v = 1; // skip camera vertex (not specular)
+  volatile int v = 1; // skip camera vertex (not specular)
 
   if(source->length == 2) return J;
 
   while(1) {
-    
-    // no perturbations for diffuse vertices
-    while(shifted->v[v].mode & s_diffuse) {
+    // don't retrace for diffuse vertices
+    while(shifted->v[v].mode & (s_diffuse | s_emit)) {
       shader_prepare(shifted, v);
-      pdf_source = mf(shader_pdf(source, v), 0) * path_G(source, v+1);
-      pdf_shifted = mf(shader_pdf(shifted, v), 0) * path_G(shifted, v+1);
-      if(pdf_shifted <= 0.0) return 0.0;
-      J *= pdf_source / pdf_shifted;
-      if(v+1 == shifted->length-1) return J;
+      if(v == shifted->length-1) return J;
       v++;
     }
-
-    // found glossy/specular vertex sequence
+    
+    // specular/glossy vertex found
+    assert(v != shifted->length-1); // can't be the last one
     while(1) {
       // random replay
       float rx, ry, r_mode;
@@ -537,7 +531,9 @@ float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
           r_mode = pointsampler(shifted, s_dim_scatter_mode);
         }
       }
-      
+
+      shader_prepare(shifted, v);
+
       pointsampler_enable_fake_random(rt.pointsampler);
       pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_x, rx);
       pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_y, ry);
@@ -549,26 +545,35 @@ float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
       
       pointsampler_disable_fake_random(rt.pointsampler);
       
-      // abort if mode is different (diffuse vs specular vs glossy ...)
+      // abort if material is different (diffuse vs specular vs glossy ...)
+      if((shifted->v[v].material_modes ^ source->v[v].material_modes) & (s_specular | s_diffuse | s_glossy)) {
+        return 0.0;
+      }
+
       // also rejects reflect <-> transmit transitions (non-invertible)
-      if(shifted->v[v].mode != source->v[v].mode) return 0.0;
+      if((shifted->v[v].mode ^ source->v[v].mode) & (s_reflect | s_transmit)) {
+        return 0.0;
+      }
       
-      // if hit is diffuse and next vertex (still from source) is also diffuse, break random replay and reconnect
-      if(shifted->v[v].mode & s_diffuse && source->v[v+1].mode & (s_diffuse | s_emit)) break;
+      // if both next vertices are diffuse (second still from source), break random replay and reconnect
+      if(shifted->v[v].mode & s_diffuse && source->v[v+1].mode & (s_diffuse | s_emit)) 
+        goto reconnect;
       
-      // if we're out of vertices, try reconnection anyway, although not diffuse
-      if(v+1 == source->length-1) break;
+      // if we're out of vertices, try reconnection anyway, although vertex v might not be diffuse (we assume s_emit at end is diffuse)
+      if(v+1 == source->length-1) goto reconnect;
       
       // propagate path further
-      if(path_propagate(shifted, v+1, s_propagate_sample)) return 0.0;
+      if(path_propagate(shifted, v+1, s_propagate_sample))
+        return 0.0;
       
       // reject envmap hits
-      if(shifted->v[v+1].flags & s_environment) return 0.0;
+      if(shifted->v[v+1].flags & s_environment)
+        return 0.0;
       
       // the Jacobian is the ratio of PDFs
       // area pdf = shader pdf * G
-      pdf_source = mf(shader_pdf(source, v), 0) * path_G(source, v+1);
-      pdf_shifted = mf(shader_pdf(shifted, v), 0) * path_G(shifted, v+1);
+      float pdf_source = mf(shader_pdf(source, v), 0) * path_G(source, v+1);
+      float pdf_shifted = mf(shader_pdf(shifted, v), 0) * path_G(shifted, v+1);
       
       if(pdf_shifted <= 0.0f) return 0.0f;
       J *= (pdf_source / pdf_shifted);
@@ -576,7 +581,10 @@ float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
       v++;
     }
 
-    if(!path_visible(shifted, v+1)) return 0.0;
+reconnect:
+    if(!path_visible(shifted, v+1))
+      return 0.0;
+
     
     // connect new hitpoint at next diffuse vertex
     if(path_project(shifted, v+1, s_propagate_mutate) ||
@@ -587,6 +595,7 @@ float path_shift_lambda(path_t *shifted, mf_t lambda, const path_t *source) {
       return 0.0;
     }
 
+    v++;
   }
 }
 
@@ -641,6 +650,8 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
         r_mode = pointsampler(shifted, s_dim_scatter_mode);
       }
     }
+
+    shader_prepare(shifted, v);
       
     pointsampler_enable_fake_random(rt.pointsampler);
     pointsampler_set_fake_random(rt.pointsampler, s_dim_omega_x, rx);
@@ -653,9 +664,13 @@ float path_shift(path_t *shifted, float pixel_i, float pixel_j, const path_t *so
     
     pointsampler_disable_fake_random(rt.pointsampler);
 
-    // abort if mode is different (diffuse vs specular vs glossy ...)
+    // abort if material is different (diffuse vs specular vs glossy ...)
+    if((shifted->v[v].material_modes ^ source->v[v].material_modes) & (s_specular | s_diffuse | s_glossy))
+      return 0.0;
+
     // also rejects reflect <-> transmit transitions (non-invertible)
-    if(shifted->v[v].mode != source->v[v].mode) return 0.0;
+    if((shifted->v[v].mode ^ source->v[v].mode) & (s_reflect | s_transmit))
+      return 0.0;
 
     // if hit is diffuse and next vertex (still from source) is also diffuse, break random replay and reconnect
     if(shifted->v[v].mode & s_diffuse && source->v[v+1].mode & (s_diffuse | s_emit)) break;

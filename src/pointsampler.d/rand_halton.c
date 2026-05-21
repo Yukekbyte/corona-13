@@ -80,11 +80,11 @@ float pointsampler_store(path_t *p, int v, int dim)
   else 
     r = points_rand(rt.points, tid);
   
-  if(dim & s_dim_omega_x)
+  if(dim == s_dim_omega_x)
     p->v[v].rands.omega_x = r;
-  else if(dim & s_dim_omega_y)
+  else if(dim == s_dim_omega_y)
     p->v[v].rands.omega_y = r;
-  else if(dim & s_dim_scatter_mode)
+  else if(dim == s_dim_scatter_mode)
     p->v[v].rands.scatter_mode = r;
   else
     printf("Random number storage not supported for this dimension\n");
