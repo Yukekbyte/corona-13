@@ -229,6 +229,7 @@ typedef struct path_t
   vertex_t v[PATHSPACE_MAX_VERTS];      // v[0] is start (light or sensor).
   edge_t   e[PATHSPACE_MAX_VERTS+1];    // e[i] leads up to v[i] (connecting from v[i-1].
   int debug_volume_bridge;
+  float lambda_rand;
 }
 __attribute__((aligned(16))) // for faster memcpy (sse) that doesn't crash.
 path_t;

@@ -21,7 +21,6 @@
 #include "spectrum.h"
 #include "pointsampler.h"
 #include "points.h"
-#include "gris.h"
 
 
 typedef struct sampler_t {} sampler_t;
@@ -31,14 +30,14 @@ void sampler_cleanup(sampler_t *s) {}
 void sampler_prepare_frame(sampler_t *s) {}
 void sampler_clear(sampler_t *s) {}
 
-// static inline mf_t sampler_mis(const path_t *p) 
-// {
-//   md_t pdf = md_set1(1.0);
-//   for(int v=1;v<p->length;v++)
-//     pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
+static inline mf_t sampler_mis(const path_t *p) 
+{
+  md_t pdf = md_set1(1.0);
+  for(int v=1;v<p->length;v++)
+    pdf = md_mul(pdf, mf_2d(p->v[v].pdf));
 
-//   return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
-// }
+  return mf_div(md_2f(pdf), mf_set1(mf_hsum(md_2f(pdf))));
+}
 
 void sampler_create_path(path_t *path)
 {

@@ -212,7 +212,7 @@ void sampler_prepare_sample(uint64_t index) {
   // Intial RIS
   ris(q, w);
 
-  #if TEMPORAL_REUSE
+  #if SPECTRAL_REUSE
     // stale samples are in read buffer
     reservoir_t *r = get_read_reservoir(q);
     if(r->c > 0)

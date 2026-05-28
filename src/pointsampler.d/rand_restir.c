@@ -32,8 +32,6 @@ fake_randoms_t;
 typedef struct pointsampler_t
 {
   fake_randoms_t *rand;
-  halton_t h;
-  uint64_t reinit;
 }
 pointsampler_t;
 
@@ -46,8 +44,6 @@ pointsampler_t *pointsampler_init(uint64_t frame)
 {
   pointsampler_t *s = calloc(1, sizeof(*s));
   s->rand = calloc(rt.num_threads, sizeof(*s->rand));
-  s->reinit = 0;
-  halton_init_random(&s->h, frame);
   return s;
 }
 
@@ -57,18 +53,24 @@ float pointsampler(path_t *p, int dim)
   if(rt.pointsampler->rand[tid].enabled)
     return rt.pointsampler->rand[tid].rand[dim];
   
-  if(dim & s_dim_lambda) {
-    int v = p->length;
-    const int end = p->v[v].rand_beg;
-    const int d = end + dim;
-    if(d < halton_get_num_dimensions())
-      return halton_sample(&rt.pointsampler->h, d, p->index);
+  // store wavelength random number because we want equally spaced wavelengths.
+  // The calls to pointsampler with dim_lambda on the same path in pathspace extend must give the same random number.
+  if(dim == s_dim_lambda) {
+    if(p->lambda_rand >= 0.0f)
+      return p->lambda_rand;
+    else {
+      float r = points_rand(rt.points, tid);
+      p->lambda_rand = r; 
+      return r;
+    }
   }
   
   // pure random mersenne twister
   return points_rand(rt.points, tid);
 }
 
+// A variant of pointsampler that stores the random numbers.
+// Used for 3 dimensions during the random replay shifts in pathspace.
 float pointsampler_store(path_t *p, int v, int dim)
 {
   // pure random mersenne twister
@@ -92,6 +94,7 @@ float pointsampler_store(path_t *p, int v, int dim)
   return r;
 }
 
+// Gets the pixels linearly.
 void pointsampler_pixel_linear(uint64_t index, int *x, int *y)
 {
   uint64_t width  = view_width();
@@ -104,13 +107,7 @@ void pointsampler_pixel_linear(uint64_t index, int *x, int *y)
   *y = (int)(wrapped / width);
 }
 
-void pointsampler_pixel(uint64_t index, int *x, int *y)
-{
-  // halton sequence snapped to integer grid
-  *x = (int)(halton_sample(&rt.pointsampler->h, s_dim_image_x, index)*view_width());
-  *y = (int)(halton_sample(&rt.pointsampler->h, s_dim_image_y, index)*view_height());
-}
-
+// Randomize within one pixel for anti-aliasing.
 void pointsampler_subpixel(int x, int y, float *pixel_i, float*pixel_j) {
   // random uniform within pixel
   const int tid = common_get_threadid();
@@ -165,9 +162,6 @@ void pointsampler_set_fake_random(pointsampler_t *s, int dim, float rand)
   s->rand[tid].rand[dim] = rand;
 }
 
-void pointsampler_prepare_frame(pointsampler_t *s) {
-  if(rt.threads->end >> 32 > s->reinit)
-    halton_init_random(&s->h, rt.anim_frame + ++s->reinit);
-}
+void pointsampler_prepare_frame(pointsampler_t *s) {}
 
 void pointsampler_stop_learning(pointsampler_t *s) {}

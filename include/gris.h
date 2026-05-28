@@ -2,7 +2,7 @@
 
 #include "reservoir.h"
 
-
+// Wrapper for the pathspace shift call.
 float shift(path_t *shifted, pixel_t q, const path_t *source_path) {
   if(is_null(source_path)) {
     set_null(shifted);
@@ -35,6 +35,7 @@ double p_hat_from_opt(path_t *x, float J) {
   return p_hat(x) / J;
 }
 
+// Returns balance heuristic MIS weight (quadratic in K)
 double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
   if(is_null(y)) return 0.0;
   
@@ -47,9 +48,41 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
     denom += c[j] * p_hat_from(y, q[j]);
   }
 
-  if(denom <= 0.) return 0.0; // paranoid case because p_hat(x) should be > 0
+  if(denom <= 0.) return 0.0; // paranoid case because num > 0
 
   return num / denom;
+}
+
+// Returns pairwise MIS weight for the canoncial sample (i.e. the target pixel).
+// arrays c and q must be of size NEIGHBOUR_COUNT
+double pairwise_mis_canonical(path_t *y, double c_canonical, double c_total, double c[], pixel_t q[]) { // m_c(y)
+  if(is_null(y)) return 0.0;
+  
+  double m_c = c_canonical / c_total;
+
+  double num = c_canonical * p_hat(y);
+  if(num <= 0.0) return 0.0;
+
+  double denom;
+  for(int j = 0; j < NEIGHBOUR_COUNT; j++) {
+    denom = num + (c_total - c_canonical) * p_hat_from(y, q[j]);
+    m_c += (c[j] / c_total) * (num / denom);
+  }
+
+  return m_c;
+}
+
+// Returns pairwise MIS weight for a noncanconcial sample (i.e. a neighbouring pixel).
+double pairwise_mis_noncanoncial(path_t *x, path_t *y, float J, double c, double c_canonical, double c_total) { // m_i(y)
+  if(is_null(y)) return 0.0;
+
+  double num = (c_total - c_canonical) * p_hat_from_opt(x, J);
+  if(num <= 0.0) return 0.0;
+
+  double denom = num + c_canonical * p_hat(y);
+  if(denom <= 0.0) return 0.0; // paranoid case because num > 0
+
+  return (c / c_total) * (num / denom);
 }
 
 #if PAIRWISE_COMBINE
@@ -98,13 +131,16 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
 #else
   // Combine multiple reservoirs in r
   // The samples in x[] (x[i]->path) will be shifted to q.
+  // Assumes a canoncial sample is put at index 0.
   static void combine(reservoir_t *r, pixel_t q, reservoir_t *x[], pixel_t qs[]) {
     // I suppose we could assert that the reservoirs are different here as well...
 
-    for(int i = 0; i < K; i++) {
-      // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
-      if(x[i]->c <= 0.) { printf("tried to combine empty reservoirs\n"); return; }
-    }
+    double c_total = 0.0;
+    for(int i = 0; i < K; i++)
+      c_total += x[i]->c;
+    
+    // reservoirs can't be empty (although the path in the reservoir can still be a null sample)
+    if(c_total <= 0.0) { printf("tried to combine empty reservoirs\n"); return; }
 
     path_t Y[K];
     float J[K];
@@ -117,8 +153,14 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
     }
 
     // MIS weights
-    for(int i = 0; i < K; i++)
-      m[i] = mis(x[i]->path, &Y[i], J[i], i, qs, c);
+    #if PAIRWISE_MIS
+      m[0] = pairwise_mis_canonical(&Y[0], c[0], c_total, &c[1], &qs[1]);
+      for(int i = 1; i < K; i++)
+        m[i] = pairwise_mis_noncanoncial(x[i]->path, &Y[i], J[i], c[i], c[0], c_total);
+    #else
+      for(int i = 0; i < K; i++)
+        m[i] = mis(x[i]->path, &Y[i], J[i], i, qs, c);
+    #endif
 
     reset(r);
     
@@ -142,7 +184,8 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
 #endif
 
 
-#if TEMPORAL_REUSE
+#if SPECTRAL_REUSE
+  // Wrapper for the pathspace lambda shift call.
   float spectral_shift(path_t *shifted, path_t *source, uint8_t invert) {
     if(is_null(source)) {
       set_null(shifted);
@@ -164,6 +207,7 @@ double mis(path_t *x, path_t *y, float J, int i, pixel_t q[], double c[]) {
     return J;
   }
 
+  // Combine two reservoirs, where the sample in r is spectrally shifted.
   void spectral_combine(reservoir_t *s, reservoir_t *r) {
     assert(s != r);
 

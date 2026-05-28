@@ -4,15 +4,16 @@
 #include "pointsampler.h"
 #include "points.h"
 
-#define M 4
-#define TEMPORAL_REUSE 1
-#define SPATIAL_REUSE_PASSES 3
+#define M 16                     // Amount of NEE-trees an intial reservoir is filled with.
+#define SPECTRAL_REUSE 1        // Turns Spectral Re-use on/off
+#define SPATIAL_REUSE_PASSES 4  // Amount of spatial re-use passes.
 
-#define NEIGHBOUR_COUNT 4
-#define NEIGHBOUR_RADIUS 10 // radius must be sufficiently big for the neighbour count.
-#define PAIRWISE_COMBINE 1
-#define LAMBDA_OFFSET 170.0f // is a float
-#define CONFIDENCE_CAP 200. // is a double
+#define NEIGHBOUR_COUNT 4   // Amount of neighbours to sample and combine with during a spatial re-use pass.
+#define NEIGHBOUR_RADIUS 10 // Half the length of the side of the square where neighbouring pixels are sampled in. Must be sufficiently big for the neighbour count!
+#define PAIRWISE_COMBINE 1  // Combine neighbouring reservoirs in pairs instead of all at once.
+#define PAIRWISE_MIS 1      // Use linear pairwise MIS weights (instead of balance heuristic = quadratic) only has effect if PAIRWISE_COMBINE is 0.
+#define LAMBDA_OFFSET 20.0f // The wavelength perturbation used in temporal re-use
+#define CONFIDENCE_CAP 200.  // The confidence weight limit.
 
 #define K (NEIGHBOUR_COUNT + 1)
 #define set_null(path) ((path)->length = -1)
